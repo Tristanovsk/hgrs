@@ -4,7 +4,7 @@
 
 ## Example
 ![example gif](fig/test_L2C_Garda.png)
-
+![example gif](fig/test_L1C_Garda_water.png)
 
 
 

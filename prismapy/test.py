@@ -33,4 +33,4 @@ for ax in fig.axs.flat:
     ax.set_ylabel('')
     ax.set_xlabel('')
 
-
+plt.savefig('fig/test_L2C_Garda.png',dpi=150)
