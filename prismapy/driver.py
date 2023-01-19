@@ -103,6 +103,7 @@ def read_L1C_data(L1C_filepath: str,
     # Geolocation
     lat = ds["/HDFEOS/SWATHS/PRS_L1_HCO/Geolocation Fields/Latitude_VNIR"][:]
     lon = ds["/HDFEOS/SWATHS/PRS_L1_HCO/Geolocation Fields/Longitude_VNIR"][:]
+    xdim,ydim=lat.shape
 
     # Wavelength / fwhm
     wl = ds.attrs["List_Cw_Vnir"][5:]
@@ -136,10 +137,12 @@ def read_L1C_data(L1C_filepath: str,
 
     Ltoa = Ltoa[:, :, sort_index]
 
-    data = xr.Dataset(data_vars=dict(Ltoa=(["y1", "x1", "wl"], Ltoa), F0=(['wl'], I0)),
+    data = xr.Dataset(data_vars=dict(Ltoa=(["y", "x", "wl"], Ltoa), F0=(['wl'], I0)),
                       coords=dict(
-                          lon=(["x1", "y1"], lon),
-                          lat=(["x1", "y1"], lat),
+                          x=range(xdim),
+                          y=range(ydim),
+                          lon=(["x", "y"], lon),
+                          lat=(["x", "y"], lat),
                           wl=wl),
                       attrs=dict(description="PRISMA L1C cube data"))
     # TODO check errors due to bulk SZA value instead of per pixel values
@@ -161,9 +164,9 @@ def read_L1C_data(L1C_filepath: str,
     # =============================================================================
     # Load masks
     # =============================================================================
-    data = data.assign(cloud_mask=(["y1", "x1"], ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/Cloud_Mask"][:]))
-    data = data.assign(sunglint_mask=(["y1", "x1"], ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/SunGlint_Mask"][:]))
-    data = data.assign(landcover_mask=(["y1", "x1"], ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/LandCover_Mask"][:]))
+    data = data.assign(cloud_mask=(["y", "x"], ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/Cloud_Mask"][:]))
+    data = data.assign(sunglint_mask=(["y", "x"], ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/SunGlint_Mask"][:]))
+    data = data.assign(landcover_mask=(["y", "x"], ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/LandCover_Mask"][:]))
     return data
 
 
@@ -211,10 +214,10 @@ def read_L2C_data(L2C_filepath: str):
     del VNIR, SWIR
 
     # # -------------------------------------------------------------------------------
-    data = xr.Dataset(data_vars=dict(rho=(["y1", "x1", "wl"], rho)),
+    data = xr.Dataset(data_vars=dict(rho=(["y", "x", "wl"], rho)),
                       coords=dict(
-                          lon=(["x1", "y1"], lon),
-                          lat=(["x1", "y1"], lat),
+                          lon=(["x", "y"], lon),
+                          lat=(["x", "y"], lat),
                           wl=wl),
                       attrs=dict(description="RISMA L2C cube data"))
 
@@ -227,9 +230,9 @@ def read_L2C_data(L2C_filepath: str):
     # =============================================================================
     # Load geometries 
     # =============================================================================
-    data = data.assign(vza=(["y1", "x1"], ds["/HDFEOS/SWATHS/PRS_L2C_HCO/Geometric Fields/Observing_Angle"][:]))
-    data = data.assign(raa=(["y1", "x1"], ds["/HDFEOS/SWATHS/PRS_L2C_HCO/Geometric Fields/Rel_Azimuth_Angle"][:]))
-    data = data.assign(sza=(["y1", "x1"], ds["/HDFEOS/SWATHS/PRS_L2C_HCO/Geometric Fields/Solar_Zenith_Angle"][:]))
+    data = data.assign(vza=(["y", "x"], ds["/HDFEOS/SWATHS/PRS_L2C_HCO/Geometric Fields/Observing_Angle"][:]))
+    data = data.assign(raa=(["y", "x"], ds["/HDFEOS/SWATHS/PRS_L2C_HCO/Geometric Fields/Rel_Azimuth_Angle"][:]))
+    data = data.assign(sza=(["y", "x"], ds["/HDFEOS/SWATHS/PRS_L2C_HCO/Geometric Fields/Solar_Zenith_Angle"][:]))
     # =============================================================================
     # Read atmospheric data
     # =============================================================================
@@ -237,8 +240,8 @@ def read_L2C_data(L2C_filepath: str):
     ds_variables = ["aot", "aex", "wvm", "cot"]
     dims = {"AOT": ["y2", "x2"],
             "AEX": ["y2", "x2"],
-            "WVM": ["y1", "x1"],
-            "COT": ["y1", "x1"]}
+            "WVM": ["y", "x"],
+            "COT": ["y", "x"]}
     for ii, var in enumerate(hdf_variables):
         gain_min = ds.attrs[f"L2Scale{var}Min"]
         gain_max = ds.attrs[f"L2Scale{var}Max"]
@@ -247,25 +250,3 @@ def read_L2C_data(L2C_filepath: str):
         data = eval(f'data.assign({ds_variables[ii]}=({var_dims},gain_min + matrix*(gain_max-gain_min)/65535))')
     return data
 
-
-# ******************************************************************************************************
-
-if __name__ == "__main__":
-    L1Cpath = "/home/damali/Work/CMIX/PRS_L1_STD_OFFL_20220701111705_20220701111710_0001.he5"
-    L2Cpath = "/home/damali/Work/CMIX/PRS_L2C_STD_20220412100139_20220412100143_0001_ROM.he5"
-
-    ds_L1C = read_L1C_data(L1Cpath)
-    ds_L2C = read_L2C_data(L2Cpath)
-
-    # =============================================================================
-    # Crop dataset to a bounding box
-    # =============================================================================
-    lat_min, lat_max, lon_min, lon_max = 47.20, 47.30, -2.4, -2.2
-    ds_L1C_cropped = ds_L1C.where(
-        (ds_L1C.lat < lat_max) & (ds_L1C.lat > lat_min) & (ds_L1C.lon > lon_min) & (ds_L1C.lon < lon_max))
-
-    # =============================================================================
-    # Plot wavelength closest to the given one
-    # =============================================================================
-    wl0 = 415  # nm
-    ds_L1C.sel(wl=wl0, method="nearest").Ltoa.plot(x="lon", y="lat")
