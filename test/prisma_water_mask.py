@@ -51,7 +51,7 @@ green = dc_l1c.Rtoa.isel(wl=20)
 nir = dc_l1c.Rtoa.isel(wl=55)
 ndwi = (green - nir) / (green + nir)
 
-coarsening = 2
+coarsening = 1
 
 # binary cmap
 bcmap = mpl.colors.ListedColormap(['white', 'darkblue'])

@@ -4,7 +4,7 @@
 from setuptools import setup, find_packages
 
 __package__ = 'prismapy'
-__version__ = '1.0.0'
+__version__ = '1.0.2'
 
 setup(
     name=__package__,
