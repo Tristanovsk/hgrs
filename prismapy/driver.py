@@ -45,7 +45,7 @@ class solar_irradiance():
         self.wl_max=2600
 
         self.gueymard = self.read_gueymard()
-        self.kurucz = self.read_gueymard()
+        self.kurucz = self.read_kurucz()
         self.thuillier = self.read_thuillier()
 
     def read_thuillier(self):
@@ -320,9 +320,9 @@ def read_L1C_data(L1C_filepath: str,
     # =============================================================================
     # Load masks
     # =============================================================================
-    data = data.assign(cloud_mask=(["y", "x"], ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/Cloud_Mask"][:]))
-    data = data.assign(sunglint_mask=(["y", "x"], ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/SunGlint_Mask"][:]))
-    data = data.assign(landcover_mask=(["y", "x"], ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/LandCover_Mask"][:]))
+    data = data.assign(cloud_mask=(["y", "x"], ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/Cloud_Mask"][:].T))
+    data = data.assign(sunglint_mask=(["y", "x"], ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/SunGlint_Mask"][:].T))
+    data = data.assign(landcover_mask=(["y", "x"], ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/LandCover_Mask"][:].T))
     return data
 
 
