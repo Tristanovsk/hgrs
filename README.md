@@ -1,5 +1,5 @@
-# prismapy package
-## Tool for easy loading of PRISMA L1C and L2C format
+# hGRS package
+## Hyperspectral Glint Removal System for hyperspectral remote sensing of the aquatic environment
 
 ### Prerequisites
 

@@ -30,19 +30,18 @@ opj = os.path.join
 # ******************************************************************************************************
 dir, filename = os.path.split(__file__)
 
-thuillier_file = resource_filename(__package__, '../data/ref_atlas_thuillier3.nc')
-gueymard_file = resource_filename(__package__, '../data/NewGuey2003.dat')
-kurucz_file = resource_filename(__package__, '../data/kurucz_0.1nm.dat')
-
-sunglint_eps_file = opj(dir, '..', 'data', 'mean_rglint_small_angles_vza_le_12_sza_le_60.txt')
-rayleigh_file = resource_filename(__package__, '../data/rayleigh_bodhaine.txt')
+thuillier_file = resource_filename(__package__, '../data/aux/ref_atlas_thuillier3.nc')
+gueymard_file = resource_filename(__package__, '../data/aux/NewGuey2003.dat')
+kurucz_file = resource_filename(__package__, '../data/aux/kurucz_0.1nm.dat')
+sunglint_eps_file = resource_filename(__package__, '../data/aux/mean_rglint_small_angles_vza_le_12_sza_le_60.txt')
+rayleigh_file = resource_filename(__package__, '../data/aux/rayleigh_bodhaine.txt')
 
 
 class solar_irradiance():
     def __init__(self, wl=None):
         # load data from raw files
-        self.wl_min=300
-        self.wl_max=2600
+        self.wl_min = 300
+        self.wl_max = 2600
 
         self.gueymard = self.read_gueymard()
         self.kurucz = self.read_kurucz()
@@ -85,8 +84,8 @@ class solar_irradiance():
         # keep spectral range of interest UV-SWIR
         solar_irr = solar_irr[(solar_irr.wl <= self.wl_max) & (solar_irr.wl >= self.wl_min)]
         solar_irr.attrs['unit'] = 'mW/m2/nm'
-        solar_irr.attrs['reference'] = 'Kurucz, R.L., Synthetic infrared spectra, in Infrared Solar Physics, '+\
-                                       'IAU Symp. 154, edited by D.M. Rabin and J.T. Jefferies, Kluwer, Acad., '+\
+        solar_irr.attrs['reference'] = 'Kurucz, R.L., Synthetic infrared spectra, in Infrared Solar Physics, ' + \
+                                       'IAU Symp. 154, edited by D.M. Rabin and J.T. Jefferies, Kluwer, Acad., ' + \
                                        'Norwell, MA, 1992.'
         return solar_irr
 
@@ -108,7 +107,7 @@ class solar_irradiance():
     def gaussian(x, mu, sigma):
         return 1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(-(x - mu) ** 2 / (2 * sigma ** 2))
 
-    def convolve(self, F0, fwhm,info={}):
+    def convolve(self, F0, fwhm, info={}):
         '''
         Convolve with spectral response of sensor based on full width at half maximum of each band
         :param F0: xarray solar irradiance to convolve, coord=wl
@@ -116,7 +115,7 @@ class solar_irradiance():
         :param info: optional parameter to feed the attributes of the output xarray
         :return:
         '''
-        wl_ref=F0.wl
+        wl_ref = F0.wl
         F0_int = []
         for fwhm_ in fwhm:
             sig = self.Gamma2sigma(fwhm_.values)
@@ -125,9 +124,8 @@ class solar_irradiance():
             F0_ = (F0 * rsr).integrate('wl') / np.trapz(rsr, wl_ref)
             F0_int.append(F0_.values)
         return xr.DataArray(F0_int, name='F0',
-                     coords={'wl': fwhm.wl.values},
-                     attrs=info)
-
+                            coords={'wl': fwhm.wl.values},
+                            attrs=info)
 
 
 class metadata():
@@ -197,6 +195,7 @@ def convolve_ISRF(init_wl: np.array, init_spectrum: np.array, new_wl: np.array, 
         res[ii] = scipy.integrate.simpson(y * ISRF, x) / scipy.integrate.simpson(ISRF, x)
     return res
 
+
 # TODO remove (deprecated)
 def load_thuillier_solar_spectrum(prisma_wl: np.array, prisma_fwhm: np.array):
     '''
@@ -259,9 +258,9 @@ def read_L1C_data(L1C_filepath: str,
     sort_index = np.argsort(wl)
     wl = wl[sort_index]
     fwhm = fwhm[sort_index]
-    fwhm = xr.DataArray(data= fwhm, name='fwhm',
-                     coords=dict(wl=wl),
-                     attrs=dict(description="PRISMA relative spectral response parameter"))
+    fwhm = xr.DataArray(data=fwhm, name='fwhm',
+                        coords=dict(wl=wl),
+                        attrs=dict(description="PRISMA relative spectral response parameter"))
 
     # solar irradiance convolution to the PRISMA spectral response function and scaled
     # by the day of the year
@@ -271,8 +270,8 @@ def read_L1C_data(L1C_filepath: str,
                                      "%Y-%m-%dT%H:%M:%S.%f").timetuple().tm_yday
     U = 1 - 0.01672 * np.cos(0.9856 * (DOY - 4))
     F0 = F0 * U
-    F0_sensor = solar_irr.convolve(F0,fwhm,info={'description':'Convolved solar irradiance from Kurucz data',
-                                                'unit':'mW/m2/nm'})
+    F0_sensor = solar_irr.convolve(F0, fwhm, info={'description': 'Convolved solar irradiance from Kurucz data',
+                                                   'unit': 'mW/m2/nm'})
     # DN to TOA radiance
     gain = {"vnir": ds.attrs["ScaleFactor_Vnir"],
             "swir": ds.attrs["ScaleFactor_Swir"]}
@@ -291,7 +290,7 @@ def read_L1C_data(L1C_filepath: str,
 
     data = xr.Dataset(data_vars=dict(Ltoa=(["y", "x", "wl"], Ltoa),
                                      F0=(['wl'], F0_sensor.values),
-                                     fwhm =(['wl'],fwhm.values),
+                                     fwhm=(['wl'], fwhm.values),
                                      lon=(["y", "x"], lon),
                                      lat=(["y", "x"], lat)),
                       coords=dict(
