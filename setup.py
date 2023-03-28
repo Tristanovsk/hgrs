@@ -3,8 +3,8 @@
 
 from setuptools import setup, find_packages
 
-__package__ = 'prismapy'
-__version__ = '1.0.2'
+__package__ = 'hgrs'
+__version__ = '1.0.3'
 
 setup(
     name=__package__,
@@ -31,6 +31,6 @@ setup(
 
     entry_points={
         'console_scripts': [
-            'prismapy = TODO'
+            'hgrs = TODO'
         ]}
 )

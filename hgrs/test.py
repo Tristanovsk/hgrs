@@ -16,8 +16,8 @@ matplotlib.use('tkagg')
 import matplotlib.pyplot as plt
 import colorcet as cc
 
-import prismapy.driver as driver
-from prismapy import metadata
+import hgrs.driver as driver
+from hgrs import metadata
 
 opj = os.path.join
 

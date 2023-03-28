@@ -20,11 +20,11 @@ mpl.use('tkagg')
 import matplotlib.pyplot as plt
 import colorcet as cc
 
-import prismapy.driver as driver
-import prismapy
+import hgrs.driver as driver
+import hgrs
 
 opj = os.path.join
-prismapy.__version__
+hgrs.__version__
 
 workdir = '/sat_data/satellite/acix-iii/Garda'
 l1c = 'PRS_L1_STD_OFFL_20210721102700_20210721102705_0001.he5'

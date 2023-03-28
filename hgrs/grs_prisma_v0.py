@@ -22,17 +22,17 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import colorcet as cc
 
-import prismapy.driver as driver
-import prismapy
+import hgrs.driver as driver
+import hgrs
 
 opj = os.path.join
-prismapy.__version__
+hgrs.__version__
 
 
 # In[2]:
 
 
-auxdir = prismapy.__path__[0]
+auxdir = hgrs.__path__[0]
 auxdir
 
 
@@ -41,27 +41,31 @@ auxdir
 
 workdir = '/sat_data/satellite/acix-iii/AERONET-OC/bahiablanca'
 l1c = 'PRS_L1_STD_OFFL_20210814141750_20210814141755_0001.he5'
+#workdir = '/sat_data/satellite/acix-iii/Garda'
+#l1c = 'PRS_L1_STD_OFFL_20210721102700_20210721102705_0001.he5'
 l2c = l1c.replace('L1_STD_OFFL','L2C_STD')
 
 
-# In[92]:
+# In[4]:
 
 
 # parameters
 wl_water_vapor=slice(800,1300)
-wl_glint=slice(2100,2350)
-wl_atmo = slice(950,2500)
+wl_glint=slice(2100,2200)
+wl_atmo = slice(950,2250)
 wl_to_remove = [(935,967),(1105,1170),(1320,1490),(1778,2033)]
 xcoarsen=20
 ycoarsen=20
+block_size = 2
 abs_gas_file = '/DATA/git/vrtc/libradtran_tbx/output/lut_abs_opt_thickness_normalized.nc' 
 lut_file = '/media/harmel/vol1/work/git/vrtc/RTxploitation/study_cases/aerosol/lut/opac_osoaa_lut_v2.nc'
+pressure_rot_ref=1013.25
 
 # TODO get them from CAMS
 to3c=6.5e-3
 tno2c=3e-6
 tch4c= 1e-2
-pressure=1013
+psl=1013
 coef_abs_scat=0.3
 
 
@@ -77,7 +81,7 @@ dc_l2c = driver.read_L2C_data(l2c_path)
 
 # ## Load metadata
 
-# In[34]:
+# In[6]:
 
 
 gas_lut =xr.open_dataset(abs_gas_file)
@@ -86,20 +90,20 @@ aero_lut = xr.open_dataset(lut_file)
 
 # ## Add angle data into L1C object
 
-# In[6]:
+# In[7]:
 
 
 for param in ['sza','vza','raa']:
     dc_l1c[param]=dc_l2c[param]
 
 
-# In[7]:
+# In[8]:
 
 
 dc_l1c
 
 
-# In[22]:
+# In[9]:
 
 
 coarsening=1
@@ -146,7 +150,7 @@ nir = img.sel(wl=slice(850,890)).mean(dim='wl')
 ndwi = (green - nir) / (green + nir)
 
 
-# In[15]:
+# In[12]:
 
 
 coarsening=1
@@ -189,7 +193,7 @@ plt.show()
 
 # ## Mask pixels based on NDWI threshold
 
-# In[16]:
+# In[13]:
 
 
 ndwi_threshold=0.1
@@ -200,7 +204,7 @@ for param in param_tomask:
     masked[param] = masked[param].where(ndwi > ndwi_threshold)
 
 
-# In[21]:
+# In[14]:
 
 
 masked
@@ -216,7 +220,7 @@ fig
 plt.show()
 
 
-# In[23]:
+# In[15]:
 
 
 # check maximum size of angle combinations to reconstruct from LUT
@@ -224,7 +228,7 @@ res=1
 #len(np.unique(dc_l2c.sza.round(res)))*len(np.unique(dc_l2c.vza.round(res)))*len(np.unique(dc_l2c.raa.round(res)))
 
 
-# In[29]:
+# In[16]:
 
 
 fig,axs= plt.subplots(1,4,figsize=(22,4))
@@ -249,13 +253,13 @@ M = np.unique(air_mass.round(3))
 
 # ## Load sensor spectral responses
 
-# In[30]:
+# In[18]:
 
 
 prisma_rsr = dc_l1c.fwhm.to_dataframe()
 
 
-# In[31]:
+# In[19]:
 
 
 def Gamma2sigma(Gamma):
@@ -278,31 +282,66 @@ for mu,fwhm in prisma_rsr.iterrows():
 
 # ## Convolution of the transmittance with sensor spectral response
 
-# In[35]:
+# In[20]:
+
+
+def get_pressure(alt, psl):
+    '''Compute the pressure for a given altitude
+       alt : altitude in meters (float or np.array)
+       psl : pressure at sea level in hPa
+       palt : pressure at the given altitude in hPa'''
+
+    palt = psl * (1. - 0.0065 * np.nan_to_num(alt) / 288.15) ** 5.255
+    return palt
+
+
+# In[21]:
+
+
+psl=1013
+alt=60
+pressure=get_pressure(alt, psl)
+
+
+# In[22]:
 
 
 sza=dc_l2c.sza.mean().values
 vza=dc_l2c.vza.mean().values
 raa = dc_l2c.raa.mean().values
-
-
-# In[36]:
-
-
-ot_wv = ot.h2o *tcwv
-ot_o3 = ot.o3 * to3c
-ot_ch4 = ot.ch4 * tch4c
-ot_no2 = ot.no2 * tno2c
-ot_others = (ot.co+ot.co2+ot.n2o+ot.o2+ot.o4)* pressure/1000
-
-ot_tot = ot_wv+ot_ch4+ot_no2+ot_o3+ot_others 
-
 M=1./np.cos(np.radians(sza))+1./np.cos(np.radians(vza))
-Ttot = np.exp(-M*ot_tot)
-wl_ref = ot_tot.wl#.values
+
+
+# In[23]:
+
+
+# Gaseous transmittance
+wl_ref = gas_lut.wl#.values
+ot_o3 = gas_lut.o3 * to3c
+ot_ch4 = gas_lut.ch4 * tch4c
+ot_no2 = gas_lut.no2 * tno2c
+ot_air = (gas_lut.co+coef_abs_scat*gas_lut.co2+coef_abs_scat*gas_lut.o2+coef_abs_scat*gas_lut.o4)* pressure/1000
+ot_other = ot_ch4+ot_no2+ot_o3+ot_air 
+
+Tg = np.exp(-M*ot_other)
+
+Tg_int=[]
+for mu,fwhm in prisma_rsr.iterrows():
+    sig = Gamma2sigma(fwhm.values)
+    rsr = gaussian(wl_ref,mu,sig)
+    Tg_ = (Tg * rsr).integrate('wl')/np.trapz(rsr, wl_ref)
+    Tg_int.append(Tg_.values)
+    
+Tg_other = xr.DataArray(Tg_int,name='Ttot',coords={'wl':dc_l1c.wl.values})
+
+
+# In[24]:
+
+
+# Water vapor transmittance
 Twv=[]
 for tcwv in [0,1,5,10,15,20,25,30,40,50,60]:
-    ot_wv = ot.h2o *tcwv
+    ot_wv = gas_lut.h2o *tcwv
     Ttot = np.exp(-M*ot_wv)
     Ttot_int=[]  
     for mu,fwhm in prisma_rsr.iterrows():
@@ -316,7 +355,7 @@ for tcwv in [0,1,5,10,15,20,25,30,40,50,60]:
 Twv = xr.concat(Twv,dim='tcwv')
 
 
-# In[38]:
+# In[25]:
 
 
 get_ipython().run_cell_magic('time', '', "Twv_hires = Twv.interp(tcwv=np.linspace(0,60,180),method='cubic' )\n")
@@ -324,29 +363,47 @@ get_ipython().run_cell_magic('time', '', "Twv_hires = Twv.interp(tcwv=np.linspac
 
 # ## Construct coarsened resolution images
 
-# In[166]:
+# In[26]:
 
 
 xgeom = dc_l1c[['sza','vza','raa']]
 xgeom_mean = xgeom.coarsen(x=xcoarsen, y=xcoarsen).mean()
 coarsen_obj=dc_l1c['Rtoa'].coarsen(x=xcoarsen, y=xcoarsen)
 Rtoa_mean =coarsen_obj.mean()#.sel(wl=wl_atmo)
+masked_mean=masked['Rtoa'].coarsen(x=xcoarsen, y=xcoarsen).mean()
+# get number of valid pixels within megapixel
+Rtoa_count = masked['Rtoa'].isel(wl=slice(10,20)).mean(dim='wl').coarsen(x=xcoarsen, y=xcoarsen).count()
+
+
 xc,yc = Rtoa_mean.x,Rtoa_mean.y
 #Rtoa_median =coarsen_obj.median()
 #Rtoa_std = coarsen_obj.std()
 
 
-# In[131]:
+# In[27]:
 
 
-# get number of valid pixels within megapixel
-Rtoa_count = masked['Rtoa'].isel(wl=slice(10,20)).mean(dim='wl').coarsen(x=xcoarsen, y=xcoarsen).count()
 Rtoa_count.plot.imshow()
 
 
-# In[132]:
+# ## Correction for gas absorption
+
+# In[28]:
 
 
+# correction other gases than water vapor
+Rtoa_l2 = Rtoa_mean/Tg_other
+masked_l2 = masked_mean/Tg_other
+
+
+# ## Retrieval of "ad hoc" water vapor transmittance 
+
+# In[29]:
+
+
+from multiprocessing import Pool #  Process pool
+from multiprocessing import sharedctypes
+import itertools
 from scipy.optimize import least_squares
 
 
@@ -368,29 +425,24 @@ def fun2(x, Twv,wl, y):
     return toa_simu2(wl,Twv,*x) - y
 
 
-# In[167]:
+# In[30]:
 
 
-from multiprocessing import Pool #  Process pool
-from multiprocessing import sharedctypes
-import itertools
-
-block_size = 2
 pix_max = xcoarsen*ycoarsen
 pix_thresh = 0 #pix_max/2
-data= Rtoa_mean.sel(wl=wl_water_vapor)
+data= Rtoa_l2.sel(wl=wl_water_vapor)
 Twv_ = Twv_hires.sel(wl=wl_water_vapor)
 Twv_['wl']=Twv_['wl']/1000
 wl_mic = Twv_.wl.values
 
 
 width,height,nwl = data.shape
-result = np.ctypeslib.as_ctypes(np.full((width,height,2),np.nan))
+result = np.ctypeslib.as_ctypes(np.full((width,height,6),np.nan))
 shared_array = sharedctypes.RawArray(result._type_, result)
 x0 =[20,-0.04,0.1]
 
 
-# In[169]:
+# In[31]:
 
 
 #Error of parameters
@@ -408,7 +460,7 @@ def chunk_process(args):
                 continue
             y=data.isel(x=ix,y=iy).dropna(dim='wl')
             #sigma = Rtoa_std.isel(x=ix,y=iy).dropna(dim='wl')
-            res_lsq = least_squares(fun, x0, args=(Twv_,wl_mic, y),bounds=([0,-1,0], [60,1,1]),diff_step=1e-6,xtol=1e-2,ftol=1e-2,max_nfev=20)
+            res_lsq = least_squares(fun, x0, args=(Twv_,wl_mic, y),bounds=([0,-10,0], [60,1,1]),diff_step=1e-2,xtol=1e-2,ftol=1e-2,max_nfev=20)
             x0 = res_lsq.x
             resVariance = (res_lsq.fun**2).sum()/(len(res_lsq.fun)-len(res_lsq.x) ) 
             hess = np.matmul(res_lsq.jac.T, res_lsq.jac)
@@ -416,8 +468,8 @@ def chunk_process(args):
                 hess_inv = np.linalg.inv(hess)
                 std = errFit(hess_inv, resVariance)
             except:
-                std=[np.nan,np.nan]
-            tmp[ix,iy,:] = [x0[0],std[0]]
+                std=[np.nan,np.nan,np.nan]
+            tmp[ix,iy,:] = [*x0,*std]
      
           
 window_idxs = [(i, j) for i, j in
@@ -429,11 +481,11 @@ res = p.map(chunk_process, window_idxs)
 result = np.ctypeslib.as_array(shared_array)
 
 
-# In[170]:
+# In[32]:
 
 
 gas_img = xr.Dataset(dict(tcwv=(["y", "x"], result[:,:,0].T),
-                          tcwv_std=(["y", "x"], result[:,:,1].T)),
+                          tcwv_std=(["y", "x"], result[:,:,3].T)),
             
                      coords=dict(
                           x=xc,
@@ -445,10 +497,20 @@ gas_img = xr.Dataset(dict(tcwv=(["y", "x"], result[:,:,0].T),
                      )
 
 
-# In[175]:
+# In[33]:
 
 
-fig,axs = plt.subplots(1,2,figsize=(10,4))
+#fig,axs = plt.subplots(1,6,figsize=(30,4))
+#axs=axs.ravel()
+#for i in range(6):
+#    im=axs[i].imshow(result[...,i])
+#    fig.colorbar(im, ax=axs[i],shrink=0.75)
+
+
+# In[34]:
+
+
+fig,axs = plt.subplots(1,2,figsize=(11,4))
 axs=axs.ravel()
 gas_img.tcwv.plot.imshow(cmap=plt.cm.Spectral_r, robust=True,
                                cbar_kwargs={'shrink': shrink,'label':'$tcwv\ (kg\cdot m^{-2})$'},ax=axs[0]) # extent=extent_val, transform=proj, 
@@ -461,9 +523,7 @@ for i in range(2):
     axs[i].set_title(param)                     
 
 
-# ## Get water vapor transmittance values
-
-# In[176]:
+# In[35]:
 
 
 tcwv_vals = gas_img.tcwv.round(1)
@@ -472,81 +532,57 @@ Twvs = Twv.interp(tcwv=tcwvs,method='linear')
 Twv_img = Twvs.interp(tcwv=tcwv_vals,method='nearest')
 
 
-# In[177]:
+# In[36]:
 
 
-ot_o3 = ot.o3 * to3c
-ot_ch4 = ot.ch4 * tch4c
-ot_no2 = ot.no2 * tno2c
-ot_others = (ot.co+coef_abs_scat*ot.co2+ot.n2o+coef_abs_scat*ot.o2+coef_abs_scat*ot.o4)* pressure/1000
-
-ot_tot = ot_ch4+ot_no2+ot_o3+ot_others 
-
-Tg = np.exp(-M*ot_tot)
-wl_ref = ot_tot.wl
-Tg_int=[]
-for mu,fwhm in prisma_rsr.iterrows():
-    sig = Gamma2sigma(fwhm.values)
-    rsr = gaussian(wl_ref,mu,sig)
-
-    Tg_ = (Tg * rsr).integrate('wl')/np.trapz(rsr, wl_ref)
-    Tg_int.append(Tg_.values)
-Tg_other = xr.DataArray(Tg_int,name='Ttot',coords={'wl':dc_l1c.wl.values})
+Rtoa_l2 = Rtoa_l2/Twv_img
 
 
-# In[183]:
+# In[37]:
 
 
-Tg_tot = Twv_img * Tg_other
+masked_l2 =masked_l2/Twv_img
 
 
-# In[180]:
+# In[38]:
 
 
-Rtoa_l2 = Rtoa_mean/Tg_tot
+def remove_wl(xarr,wl_to_remove):
+    for wls in wl_to_remove:
+        wl_min,wl_max=wls
+        xarr = xarr.where((xarr.wl < wl_min) | (xarr.wl > wl_max))
+    xarr  = xarr.where((masked.wl < 2450))
+    return xarr
+Rtoa_l2=remove_wl(Rtoa_l2,wl_to_remove)
+masked_l2 =remove_wl(masked_l2,wl_to_remove)
 
 
-# In[222]:
-
-
-Rtoa_l2
-
-
-# In[223]:
-
-
-for wls in wl_to_remove:
-    wl_min,wl_max=wls
-    Rtoa_l2 = Rtoa_l2 .where((masked.wl < wl_min) | (masked.wl > wl_max))
-Rtoa_l2  = Rtoa_l2 .where((masked.wl < 2450))
-
-
-# In[224]:
+# In[39]:
 
 
 azi=180-raa
-from prismapy import metadata
+from hgrs import metadata
 
 auxdata = metadata()#wl=masked.wl)
 
 wl = Rtoa_l2.wl
 
 sunglint_eps =  auxdata.sunglint_eps['mean'].interp(wl=wl)
-sunglint_eps =sunglint_eps / sunglint_eps.sel(wl=wl_glint).mean(dim='wl')
-rot = auxdata.rot.interp(wl=wl)
+#sunglint_eps =sunglint_eps / sunglint_eps.sel(wl=wl_glint).mean(dim='wl')
+rot = auxdata.rot.interp(wl=wl)*pressure/pressure_rot_ref
 
 aot_refs=np.logspace(-3,np.log10(1.5),100)
 model='MACL_rh70'
 #model='DESE_rh70'
 aot_hires=aero_lut.sel(model=model).aot.interp(wl=wl/1000,method='quadratic').interp(aot_ref=aot_refs,method='quadratic')#sel(wl=wl_glint)
-Rtoa_lut_hires = aero_lut.sel(model=model).I.sel(sza=sza,vza=vza,azi=azi,method='nearest').squeeze().interp(wl=wl/1000,method='quadratic').interp(aot_ref=aot_refs,method='quadratic')
+Rtoa_lut_hires = aero_lut.sel(model=model).I.sel(sza=sza,vza=vza,azi=azi,method='nearest').squeeze().interp(wl=wl/1000,method='quadratic').interp(aot_ref=aot_refs,method='quadratic')/np.cos(np.radians(sza))
 
 
-# In[225]:
+# In[40]:
 
 
-data= Rtoa_l2
-
+data= masked_l2
+pix_thresh = pix_max/2
 wl_ = data.wl.values
 aot_ = aot_hires.sel(wl=wl_atmo)
 rot_ = rot.sel(wl=wl_atmo)
@@ -558,7 +594,7 @@ result = np.ctypeslib.as_ctypes(np.full((width,height,4),np.nan))
 shared_array = sharedctypes.RawArray(result._type_, result)
 
 
-# In[226]:
+# In[41]:
 
 
 def transmittance_dir(aot,M,rot=0):
@@ -572,7 +608,7 @@ def toa_simu(wl,aot,rot,Rtoa_lut,sunglint_eps,aot_ref,BRDFg):
     Rdiff = Rtoa_lut.interp(aot_ref=aot_ref)
     Tdir = transmittance_dir(aot,M,rot=rot)
     sunglint_corr = Tdir * sunglint_eps
-    Rdir=sunglint_corr * BRDFg
+    Rdir=sunglint_corr * BRDFg/Tdir.sel(wl=wl_glint).mean(dim='wl')
     #sunglint_toa.Rtoa.plot(x='wl',hue='aot_ref',ax=axs[0])
     
     return Rdiff+Rdir
@@ -592,18 +628,22 @@ def chunk_process(args):
     x0 =[0.2,0]
     for ix in range(window_x, min(width,window_x + block_size)):
         for iy in range(window_y, min(height,window_y + block_size)):
-            if Rtoa_count.isel(x=ix,y=iy).values<300:
+            if Rtoa_count.isel(x=ix,y=iy).values<pix_thresh:
                 continue
-            y=Rtoa_mean.isel(x=ix,y=iy).dropna(dim='wl')
+            x0 =[0.2,0.002]
+            y=data.isel(x=ix,y=iy).dropna(dim='wl')
             #sigma = Rtoa_std.isel(x=ix,y=iy).dropna(dim='wl')
-            res_lsq = least_squares(fun, x0, args=(wl_,aot_,rot_,Rtoa_lut_,sunglint_eps_, y),bounds=([0.002, 0], [1.45,3]),diff_step=1e-6,xtol=1e-2,ftol=1e-2,max_nfev=20)
+            res_lsq = least_squares(fun, x0, args=(wl_,aot_,rot_,Rtoa_lut_,sunglint_eps_, y),bounds=([0.002, 0], [1.45,1.3]),diff_step=1e-6,xtol=1e-2,ftol=1e-2,max_nfev=20)
             x0 = res_lsq.x
             resVariance = (res_lsq.fun**2).sum()/(len(res_lsq.fun)-len(res_lsq.x) ) 
             hess = np.matmul(res_lsq.jac.T, res_lsq.jac)
-            hess_inv = np.linalg.inv(hess)
-            std = errFit(hess_inv, resVariance)
+            
+            try:
+                hess_inv = np.linalg.inv(hess)
+                std = errFit(hess_inv, resVariance)
+            except:
+                std=[np.nan,np.nan]
             tmp[ix,iy,:] = [*x0,*std]
-     
           
 window_idxs = [(i, j) for i, j in
                itertools.product(range(0, width, block_size),
@@ -614,7 +654,7 @@ res = p.map(chunk_process, window_idxs)
 result = np.ctypeslib.as_array(shared_array)
 
 
-# In[227]:
+# In[42]:
 
 
 aero_img = xr.Dataset(dict(aot_ref=(["y", "x"], result[:,:,0].T),
@@ -631,30 +671,93 @@ aero_img = xr.Dataset(dict(aot_ref=(["y", "x"], result[:,:,0].T),
                      )
 
 
-# In[234]:
+# In[43]:
 
 
 aot_ref_vals = aero_img.aot_ref.round(3)
 aot_refs = np.unique(aot_ref_vals)
 aot_refs= aot_refs[~np.isnan(aot_refs)]
+
+
+aots = aot_hires.interp(aot_ref=aot_refs,method='linear')
+aot_img = aots.interp(aot_ref=aot_ref_vals,method='nearest')
 Rdiffs = Rtoa_lut_hires.interp(aot_ref=aot_refs,method='linear')
 Rdiff_img = Rdiffs.interp(aot_ref=aot_ref_vals,method='nearest')
+Tdir = transmittance_dir(aot_img,M,rot=rot)
 
 
-# In[235]:
+# In[44]:
 
 
-Rrs_l2 = (Rtoa_l2 - Rdiff_img)/np.pi
+Rcorr = (masked_l2 - Rdiff_img)
+Rdir = Tdir * sunglint_eps* (Rcorr.sel(wl=wl_glint)/(Tdir.sel(wl=wl_glint)*sunglint_eps.sel(wl=wl_glint))).mean(dim='wl') 
+Rrs_l2 = (Rcorr-Rdir)/np.pi
 Rrs_l2.name='Rrs'
 
 
-# In[ ]:
+# In[55]:
 
 
+masked
 
 
+# ## Last step apply atmospheric retrieval to full resolution image
 
-# In[236]:
+# In[64]:
+
+
+Tg_tot=(Twv_img*Tg_other).interp(x=masked.x,y=masked.y)
+
+
+# In[56]:
+
+
+atmo_img=(Rdir+ Rdiff_img).interp(x=masked.x,y=masked.y)
+
+
+# In[65]:
+
+
+L2grs = (masked.Rtoa/Tg_tot-atmo_img)/np.pi
+
+
+# In[66]:
+
+
+L2grs.name='Rrs'
+
+
+# In[45]:
+
+
+get_ipython().run_line_magic('matplotlib', 'widget')
+plt.figure(figsize=(10,5))
+ycenter=20
+for i in range(3):
+    for j in range(3):
+        Rdiff = Rdiff_img.isel(x=25+i,y=ycenter+j)
+        (Rdiff+Rdir.isel(x=25+i,y=ycenter+j)).plot(x='wl',color='red',alpha=0.5,lw=1.2)#,label='PRISMA')
+        Rdiff.plot(x='wl',color='red',alpha=0.5,ls=':',lw=0.7)#,label='PRISMA')
+        Rtoa_l2.isel(x=25+i,y=ycenter+j).plot(x='wl',color='black',alpha=0.5,lw=1.2)#
+        
+plt.hlines(0,350,2500,ls=':',lw=0.5,color='black',zorder=0)
+plt.ylabel('$R_{diff}$')
+plt.legend()
+#plt.xlim(350,500)
+
+
+# In[46]:
+
+
+wl_ = Rrs_l2.wl.values
+aot_ = aot_hires.sel(wl=wl_)
+rot_ = rot.sel(wl=wl_)
+Rtoa_lut_ =Rtoa_lut_hires.sel(wl=wl_atmo)
+sunglint_eps_ =sunglint_eps.sel(wl=wl_atmo)
+Tdir = transmittance_dir(aot_,M,rot=rot)
+
+
+# In[47]:
 
 
 params=['aot_ref','aot_ref_std','brdfg','brdfg_std']
@@ -677,10 +780,10 @@ for i in range(4):
 
 
 
-# In[237]:
+# In[48]:
 
 
-fig =Rrs_l2.sel(wl=[440,500,550,600,650,700,750,800,850],method='nearest').plot.imshow(col='wl',col_wrap=3,robust=True,cmap=plt.cm.Spectral_r)
+fig =Rrs_l2.sel(wl=[440,500,550,600,650,700,750,800,850],method='nearest').plot.imshow(col='wl',col_wrap=3,vmin=0,robust=True,cmap=plt.cm.Spectral_r)
 for ax in fig.axs.flat:
     ax.set(xticks=[], yticks=[])
     ax.set_ylabel('')
@@ -688,7 +791,7 @@ for ax in fig.axs.flat:
 fig
 
 
-# In[181]:
+# In[49]:
 
 
 fig =Rtoa_l2.sel(wl=[705,715,805,980,1300,2200],method='nearest').plot.imshow(col='wl',col_wrap=3,robust=True,cmap=plt.cm.Spectral_r)
@@ -705,10 +808,158 @@ fig
 
 
 
+# In[67]:
+
+
+from holoviews import streams
+import holoviews as hv
+import panel as pn
+import param
+import numpy as np
+import xarray as xr
+hv.extension('bokeh')
+from holoviews import opts
+
+opts.defaults(
+    opts.GridSpace(shared_xaxis=True, shared_yaxis=True),
+    opts.Image(cmap='binary_r', width=800, height=700),
+    opts.Labels(text_color='white', text_font_size='8pt', text_align='left', text_baseline='bottom'),
+    opts.Path(color='white'),
+    opts.Spread(width=900),
+    opts.Overlay(show_legend=True))
+# set the parameter for spectra extraction
+hv.extension('bokeh')
+pn.extension()
+
+
+param = 'Rrs' #Rtoa'
+#img = dc_l1c[['Rtoa','Ltoa']] 
+raster = L2grs #masked[param] 
+#img = dc_l1c[['Rtoa','Ltoa']] 
+vmax = 0.04
+#param = 'rho'
+#raster = dc_l2c[param] 
+cmap='RdBu_r'
+cmap='Spectral_r'
+third_dim = 'wl'
+
+wl= raster.wl.data
+Nwl = len(wl)
+ds = hv.Dataset(raster.persist())
+im= ds.to(hv.Image, ['x', 'y'], dynamic=True).opts(cmap=cmap ,colorbar=True,clim=(0.00,vmax)).hist(bin_range=(0,0.2)) 
+
+polys = hv.Polygons([])
+box_stream = hv.streams.BoxEdit(source=polys)
+dmap, dmap_std=[],[]
+
+def roi_curves(data,ds=ds):    
+    if not data or not any(len(d) for d in data.values()):
+        return hv.NdOverlay({0: hv.Curve([],'Wavelength (nm)', param)})
+
+    curves,envelope = {},{}
+    data = zip(data['x0'], data['x1'], data['y0'], data['y1'])
+    for i, (x0, x1, y0, y1) in enumerate(data):
+        selection = ds.select(x=(x0, x1), y=(y0, y1))
+        mean = selection.aggregate(third_dim, np.mean).data
+        std = selection.aggregate(third_dim, np.std).data
+        wl = mean.wl
+
+        curves[i]= hv.Curve((wl,mean[param]),'Wavelength (nm)', param) 
+
+    return hv.NdOverlay(curves)
+
+
+# a bit dirty to have two similar function, but holoviews does not like mixing Curve and Spread for the same stream
+def roi_spreads(data,ds=ds):    
+    if not data or not any(len(d) for d in data.values()):
+        return hv.NdOverlay({0: hv.Curve([],'Wavelength (nm)', param)})
+
+    curves,envelope = {},{}
+    data = zip(data['x0'], data['x1'], data['y0'], data['y1'])
+    for i, (x0, x1, y0, y1) in enumerate(data):
+        selection = ds.select(x=(x0, x1), y=(y0, y1))
+        mean = selection.aggregate(third_dim, np.mean).data
+        std = selection.aggregate(third_dim, np.std).data
+        wl = mean.wl
+
+        curves[i]=  hv.Spread((wl,mean[param],std[param]),fill_alpha=0.3)
+
+    return hv.NdOverlay(curves)
+
+mean=hv.DynamicMap(roi_curves,streams=[box_stream])
+std =hv.DynamicMap(roi_spreads, streams=[box_stream])    
+hlines = hv.HoloMap({wl[i]: hv.VLine(wl[i]) for i in range(Nwl)},third_dim )
+
+
+hv.output(widget_location='top_left')
+
+# visualize and play
+graphs = ((mean* std *hlines).relabel(param))
+layout = (im * polys +graphs    ).opts(opts.Image(tools=['hover']),
+    opts.Curve(width=750,height=500, framewise=True,xlim=(400,2500),tools=['hover']), 
+    opts.Polygons(fill_alpha=0.2, color='green',line_color='black'), 
+    opts.VLine(color='black')).cols(2)
+layout 
+
+
 # In[ ]:
 
 
 
+
+
+# In[68]:
+
+
+from aeronet_visu import data_loading as dl
+dir = '/DATA/AERONET/OCv3/'
+figdir= '/DATA/AERONET/fig'
+aeronet_site = 'Bahia_Blanca'
+file = aeronet_site+'_OCv3.lev15'
+
+irr = dl.irradiance()
+irr.load_F0()
+
+param = 'Lwn'
+
+# ---------------------------------------------
+# Load data and convert into xarray
+# ---------------------------------------------
+
+df = dl.read(opj(dir, file)).read_aeronet_ocv3()
+
+df = df.droplevel(0, 1)
+# criteria to select scalar and spectrum values
+criteria = df.columns.get_level_values(1) == ''
+df_att = df.loc[:, criteria].droplevel(1, 1)
+df_spec = df.loc[:, ~criteria]
+
+ds = df_spec.stack().to_xarray()
+ds = xr.merge([ds, df_att.to_xarray()])
+del df
+
+ds = ds.assign_coords({'level_1': ds.level_1.astype(float)}).rename({'level_1': "wl"})
+ds['SZA'] = ds.Solar_Zenith_Angle.mean(axis=1)
+ds['year']=ds['date.year']
+ds['season']=ds['date.season']
+
+wl = ds.wavelength * 1000
+ds['Rrs'] = ds[param] / (irr.get_F0(wl) * 0.1)
+
+
+# In[69]:
+
+
+plt.figure(figsize=(10,5))
+xcenter,ycenter=500,500
+for i in range(5):
+    for j in range(5):
+        L2grs.isel(x=xcenter+i,y=ycenter+j).plot(x='wl',color='black',alpha=0.5,lw=1.2)#,label='PRISMA')
+ds.Rrs.sel(date='2021-08-14',method='nearest').plot(x='wl',marker='o',color='red',label='AERONET-OC')
+plt.hlines(0,350,2500,ls=':',lw=0.5,color='black',zorder=0)
+plt.ylabel('$R_{rs}\ (sr^{-1})$')
+plt.legend()
+#plt.xlim(390,1100)
 
 
 # In[41]:
@@ -881,7 +1132,7 @@ Rtoa_lut['wl']= Rtoa_lut['wl']*1000
 # In[56]:
 
 
-from prismapy import metadata
+from hgrs import metadata
 
 
 wl_glint=slice(2100,2350)
@@ -923,8 +1174,19 @@ Tdir = transmittance_dir(aot,M,rot=rot)
 Tdir.plot()
 
 
-# In[221]:
+# In[175]:
 
+
+data=masked.Rtoa
+#data=Rtoa_l2
+
+cmap = mpl.colors.LinearSegmentedColormap.from_list("",
+                                                    ['navy', "blue", 'lightskyblue',
+                                                     "grey",   'forestgreen','yellowgreen',
+                                                     "khaki", "gold",
+                                                     'orangered', "firebrick", 'purple'])
+
+norm = mpl.colors.Normalize(vmin=0.01,vmax=1.1)#-3, vmax=np.log10(1.5))
 
 models = ['COAV', 'DESE', 'MACL', 'MAPO', 'COPO', 'URBA']
 rh='_rh70'
@@ -935,23 +1197,27 @@ for i_,model_ in  enumerate(models):
     model=model_+rh
     for i in range(5):
         for j in range(5):
-            pixel=masked.Rtoa.sel(x=499+i,y=631+j)
+            pixel=data.sel(x=499+i,y=631+j)
             pixel.plot(x='wl',color='black',alpha=0.5,ax=axs[i_])#,label='PRISMA')
     #pixel.Rtoa.plot(ax=axs[i_])
-    Rtoa_lut = lut.I.sel(model=model).sel(sza=sza,vza=vza,azi=azi,method='nearest').squeeze()/np.cos(np.radians(sza))
+    Rtoa_lut = aero_lut.I.sel(model=model).sel(sza=sza,vza=vza,azi=azi,method='nearest').squeeze()/np.cos(np.radians(sza))
     Rtoa_lut['wl']= Rtoa_lut['wl']*1000
     Rtoa_lut=Rtoa_lut.interp(wl=masked.wl.values,method='cubic')
-    aot=lut.sel(model=model).aot.interp(wl=masked.wl/1000,method='cubic')
+    aot=aero_lut.sel(model=model).aot.interp(wl=masked.wl/1000,method='cubic')
     Tdir = transmittance_dir(aot,M,rot=rot)
     sunglint_corr = Tdir * sunglint_eps
-    sunglint_toa=sunglint_corr *( pixel.sel(wl=slice(2150,2350))-Rtoa_lut.sel(wl=slice(2150,2350))).mean(dim='wl')
+    sunglint_toa=sunglint_corr *0.1#( pixel.sel(wl=slice(2150,2350))-Rtoa_lut.sel(wl=slice(2150,2350))).mean(dim='wl')
     #sunglint_toa.Rtoa.plot(x='wl',hue='aot_ref',ax=axs[0])
-    Rsim = ( Rtoa_lut)#+sunglint_toa)
-    Rsim.plot(x='wl',hue='aot_ref',ax=axs[i_])
+    
+    Rsim = ( Rtoa_lut+sunglint_toa)
+    for aot_ref in Rtoa_lut.aot_ref.values[1:]:
+        Rtoa_lut.sel(aot_ref=aot_ref).plot(x='wl',color=cmap(norm(aot_ref)),ls=':',lw=1,ax=axs[i_])
+        Rsim.sel(aot_ref=aot_ref).plot(x='wl',color=cmap(norm(aot_ref)),label=str(aot_ref),lw=1,ax=axs[i_])
     Rtoa_sim= Rsim.interp(aot_ref=0.4)
-    Rtoa_sim.plot(x='wl',color='black',ls='--',ax=axs[i_])
+    #Rtoa_sim.plot(x='wl',color='black',ls='--',ax=axs[i_])
     axs[i_].set_title(model)
     axs[i_].minorticks_on()
+    axs[i_].legend()
 
 
 # In[249]:
@@ -1631,7 +1897,7 @@ ds = hv.Dataset(raster)
 im= ds.to(hv.Image, ['x', 'y'], dynamic=True).opts(cmap= 'RdBu_r',colorbar=True,clim=(0.00,0.2035)).hist(bin_range=(0,0.2)) 
 
 
-# In[238]:
+# In[114]:
 
 
 from holoviews import streams
@@ -1719,13 +1985,13 @@ hv.output(widget_location='top_left')
 # visualize and play
 graphs = ((mean* std *hlines).relabel(param))
 layout = (im * polys +graphs    ).opts(opts.Image(tools=['hover']),
-    opts.Curve(width=600, framewise=True,xlim=(400,2500),tools=['hover']), 
+    opts.Curve(width=750,height=500, framewise=True,xlim=(400,2500),tools=['hover']), 
     opts.Polygons(fill_alpha=0.2, color='green',line_color='black'), 
     opts.VLine(color='black')).cols(2)
 layout 
 
 
-# In[ ]:
+# In[156]:
 
 
 from aeronet_visu import data_loading as dl
@@ -1764,17 +2030,19 @@ wl = ds.wavelength * 1000
 ds['Rrs'] = ds[param] / (irr.get_F0(wl) * 0.1)
 
 
-# In[ ]:
+# In[157]:
 
 
 plt.figure(figsize=(10,5))
 
 for i in range(3):
     for j in range(3):
-        Rrs.sel(x=499+i,y=499+j).plot(x='wl',color='black',alpha=0.5)#,label='PRISMA')
+        Rrs_l2.isel(x=25+i,y=25+j).plot(x='wl',color='black',alpha=0.5,lw=1.2)#,label='PRISMA')
 ds.Rrs.sel(date='2021-08-14',method='nearest').plot(x='wl',marker='o',color='red',label='AERONET-OC')
+plt.hlines(0,350,2500,ls=':',lw=0.5,color='black',zorder=0)
 plt.ylabel('$R_{rs}\ (sr^{-1})$')
 plt.legend()
+plt.xlim(390,1100)
 
 
 # ## Example of exploiation: compute NDWI for water pixel masking
@@ -1868,7 +2136,7 @@ fig
 # In[49]:
 
 
-from prismapy import metadata
+from hgrs import metadata
 auxdata = metadata()#wl=masked.wl)
 wlref=2200
 wl = img.wl
