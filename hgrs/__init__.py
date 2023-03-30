@@ -7,3 +7,4 @@ v1.0.3 development of the process kernel
 __version__ = '1.0.3'
 
 from .driver import metadata
+from .hgrs_kernel import algo
