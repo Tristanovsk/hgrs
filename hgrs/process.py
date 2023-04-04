@@ -51,6 +51,11 @@ prod.get_air_mass()
 prod.get_coarse_masked_raster()
 prod.get_gaseous_transmittance()
 prod.other_gas_correction()
+wv_retrieval = hgrs.water_vapor(prod)
+wv_retrieval.solve()
+prod.get_wv_transmittance_raster(wv_retrieval.water_vapor)
+prod.water_vapor_correction()
+
 
 plt.figure(figsize=(10,10))
 fig = prod.rgb('Rtoa_masked',raster_name='coarse_masked_raster')

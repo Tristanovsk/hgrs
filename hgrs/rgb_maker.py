@@ -13,6 +13,7 @@ import numpy as np
 import scipy.optimize as so
 import pandas as pd
 import xarray as xr
+import datetime as dt
 
 import hgrs.driver as driver
 import hgrs
@@ -24,8 +25,8 @@ opj = os.path.join
 workdir = '/sat_data/satellite/acix-iii/AERONET-OC'
 sites = os.listdir(workdir)
 
-#workdir = '/sat_data/satellite/acix-iii'
-#sites = ['Wendtorf', 'Varese', 'Venice_Lagoon', 'Geneve', 'Garda', 'Trasimeno']
+workdir = '/sat_data/satellite/acix-iii'
+sites = ['Wendtorf', 'Varese', 'Venice_Lagoon', 'Geneve', 'Garda', 'Trasimeno']
 
 for site in sites:
     workdir_ =opj(workdir,site)
@@ -38,8 +39,9 @@ for site in sites:
         figname = opj('/sat_data/satellite/acix-iii/fig/', site + '_' + l1c.replace('.he5', '.png'))
         print(l1c_path)
         if os.path.exists(figname):
-             continue
-
+            pass
+            #continue
+        date= dt.datetime.strptime(l1c.split('_')[4],'%Y%m%d%H%M%S')
         l2c = l1c.replace('L1_STD_OFFL','L2C_STD')
         #l1c_path = opj(workdir,l1c)
         l2c_path = opj(workdir,l2c)
@@ -51,9 +53,11 @@ for site in sites:
         #     dc_l1c[param]=dc_l2c[param]
 
         prod = hgrs.algo(dc_l1c)
-        prod.load_metadata()
-        prod.get_ndwi()
-        plt.figure(figsize=(10, 10))
+        #prod.load_metadata()
+        #prod.get_ndwi()
+        plt.figure(figsize=(7,7))
         fig = prod.rgb()
+        fig.figure.suptitle(site+', '+str(date),fontsize=19)
+        fig.figure.tight_layout()
         fig.figure.savefig(figname,dpi=300)
         plt.close()

@@ -10,11 +10,13 @@ from multiprocessing import sharedctypes
 import itertools
 from scipy.optimize import least_squares
 
+from . import metadata
 opj = os.path.join
 
 
 class product():
     def __init__(self, l1c_obj=None):
+
         # spectral parameters
         self.wl_water_vapor = slice(800, 1300)
         self.wl_sunglint = slice(2150, 2250)
@@ -29,6 +31,8 @@ class product():
         self.xcoarsen = 20
         self.ycoarsen = 20
         self.block_size = 2
+        # minimum number of water native pixel in the mega-pixel 
+        self.pixel_threshold = 1
         # number of digits to keep for angle values
         self.ang_resol = 1
 
@@ -36,12 +40,14 @@ class product():
         self.dirdata = resource_filename(__package__, '../data/')
         self.abs_gas_file = opj(self.dirdata, 'lut', 'lut_abs_opt_thickness_normalized.nc')
         self.lut_file = opj(self.dirdata, 'lut', 'opac_osoaa_lut_v2.nc')
+        self.water_vapor_transmittance_file= opj(self.dirdata, 'lut', 'water_vapor_transmittance.nc')
         self.pressure_rot_ref = 1013.25
 
         # mask thresholding parameters
         self.sunglint_threshold = 0.11
         self.ndwi_threshold = 0.01
         self.green_swir_index_threshold = 0.1
+
 
         # atmosphere auxiliary data
         # TODO get them from CAMS
@@ -57,12 +63,26 @@ class product():
         # xarray object to be processed
         self.raster = l1c_obj
         self.Rtoa = self.raster['Rtoa']
+        self.wl = self.Rtoa.wl
+        self.sza_mean= np.nanmean(self.raster.sza)
+        self.vza_mean= np.nanmean(self.raster.vza)
+        self.raa_mean= np.nanmean(self.raster.raa)
 
         self.Tg_other = None
 
     def load_metadata(self):
+
+        # get LUT
         self.gas_lut = xr.open_dataset(self.abs_gas_file)
         self.aero_lut = xr.open_dataset(self.lut_file)
+        # convert wavelength in nanometer
+        self.aero_lut['wl'] = self.aero_lut['wl']*1000
+        self.aero_lut['wl'].attrs['description']= 'wavelength of simulation (nanometer)'
+        self.Twv_lut = xr.open_dataset(self.water_vapor_transmittance_file)
+
+        # get hgrs metadata
+        self.atmosphere = metadata.atmosphere(self.wl)
+        self.solar_irradiance = metadata.solar_irradiance()
 
     def get_ndwi(self):
         green = self.Rtoa.sel(wl=self.wl_green).mean(dim='wl')
@@ -96,11 +116,11 @@ class product():
         self.air_mass_mean = np.nanmean(self.air_mass)
 
     @staticmethod
-    def remove_wl(xarr, wl_to_remove):
+    def remove_wl(xarr, wl_to_remove,drop=True):
         for wls in wl_to_remove:
             wl_min, wl_max = wls
-            xarr = xarr.where((xarr.wl < wl_min) | (xarr.wl > wl_max))
-        xarr = xarr.where((xarr.wl < 2450))
+            xarr = xarr.where((xarr.wl < wl_min) | (xarr.wl > wl_max),drop=drop)
+        xarr = xarr.where((xarr.wl < 2450),drop=drop)
         return xarr
 
     @staticmethod
@@ -121,47 +141,6 @@ class product():
         return fig
 
 
-#
-#
-# class gas_corr(product):
-#     # Gaseous transmittance
-#     wl_ref = gas_lut.wl  # .values
-#     ot_o3 = gas_lut.o3 * to3c
-#     ot_ch4 = gas_lut.ch4 * tch4c
-#     ot_no2 = gas_lut.no2 * tno2c
-#     ot_air = (
-#                          gas_lut.co + coef_abs_scat * gas_lut.co2 + coef_abs_scat * gas_lut.o2 + coef_abs_scat * gas_lut.o4) * pressure / 1000
-#     ot_other = ot_ch4 + ot_no2 + ot_o3 + ot_air
-#
-#     Tg = np.exp(-M * ot_other)
-#
-#     Tg_int = []
-#     for mu, fwhm in prisma_rsr.iterrows():
-#         sig = Gamma2sigma(fwhm.values)
-#         rsr = gaussian(wl_ref, mu, sig)
-#         Tg_ = (Tg * rsr).integrate('wl') / np.trapz(rsr, wl_ref)
-#         Tg_int.append(Tg_.values)
-#
-#     Tg_other = xr.DataArray(Tg_int, name='Ttot', coords={'wl': dc_l1c.wl.values})
-#     def toa_simu(wl, Twv, tcwv, a, b):
-#         '''wl in micron
-#         '''
-#         # print(Twv.tcwv)
-#         return Twv.interp(tcwv=tcwv, method='linear').values * (a * wl + b)
-#
-#
-#     def toa_simu2(wl, Twv, tcwv, c0, c1, c2, c3):
-#         return c0 * np.exp(-c1 * wl ** -c2) * Twv_.interp(tcwv=tcwv).values + c3 * wl_ ** -3 * Twv_.interp(
-#             tcwv=0.3 * tcwv).values
-#
-#
-#     def fun(x, Twv, wl, y):
-#         return toa_simu(wl, Twv, *x) - y
-#
-#
-#     def fun2(x, Twv, wl, y):
-#         return toa_simu2(wl, Twv, *x) - y
-#
 
 class algo(product):
 
@@ -182,7 +161,7 @@ class algo(product):
 
     def get_coarse_masked_raster(self, variables=['sza', 'vza', 'raa', 'Rtoa_masked']):
         self.coarse_masked_raster = self.raster[variables].coarsen(x=self.xcoarsen, y=self.ycoarsen).mean()
-        self.coarse_masked_raster['pixel_number'] = self.raster['Rtoa_masked']. \
+        self.coarse_masked_raster['water_pixel_number'] = self.raster['Rtoa_masked']. \
             isel(wl=slice(10, 20)).mean(dim='wl'). \
             coarsen(x=self.xcoarsen, y=self.ycoarsen).count()
 
@@ -223,6 +202,28 @@ class algo(product):
         self.__dict__[raster_name][variable] = self.__dict__[raster_name][variable] / self.Tg_other
         self.__dict__[raster_name][variable].attrs['other_gas_correction'] = True
 
+    def water_vapor_correction(self,raster_name='coarse_masked_raster', variable='Rtoa_masked'):
+        attrs = self.__dict__[raster_name][variable].attrs
+        if attrs.__contains__('water_vapor_correction'):
+            if attrs['other_gas_correction']:
+                print('raster ' + raster_name + '.' + variable + ' is already corrected for water vapor transmittance')
+                print('set attribute other_gas_correction to False to proceed anyway')
+                return
+
+        if self.Twv_raster is None:
+            print('xarray of water vapor transmittance is not set, please run get_wv_transmittance_raster(tcwv_raster)')
+            return
+        self.__dict__[raster_name][variable] = self.__dict__[raster_name][variable] / self.Twv_raster
+        self.__dict__[raster_name][variable].attrs['water_vapor_correction'] = True
+
+    def get_wv_transmittance_raster(self,tcwv_raster):
+        tcwv_vals = tcwv_raster.tcwv.round(1)
+        tcwvs = np.unique(tcwv_vals)
+        tcwvs = tcwvs[~np.isnan(tcwvs)]
+        # TODO improve for air_mass raster
+        Twvs = self.Twv_lut.Twv.interp(air_mass=self.air_mass_mean).interp(tcwv=tcwvs, method='linear')
+        self.Twv_raster = Twvs.interp(tcwv=tcwv_vals, method='nearest')
+
 
 class solver():
     def __init__(self):
@@ -239,19 +240,21 @@ class solver():
 
 class water_vapor(solver):
 
-    def __init__(self, prod, Twv_hires, raster_name='coarse_masked_raster',
-                 variable='Rtoa_masked'):  # data,Twv_hires,pixel_number=None,pix_thresh=1,block_size=2):
+    def __init__(self, prod,
+                 raster_name='coarse_masked_raster',
+                 variable='Rtoa_masked'):
 
         self.prod = prod
+        self.raster = prod.__dict__[raster_name]
         # get data for the subset of "water vapor" wavelengths
-        data = prod.__dict__[raster_name][variable].sel(wl=prod.wl_water_vapor)
+        data = self.raster[variable].sel(wl=prod.wl_water_vapor)
         self.data = data
         self.width, self.height, self.nwl = data.shape
         self.x = data.x
         self.y = data.y
         self.wl = data.wl
-
-        self.Twv_ = Twv_hires.sel(wl=self.wl)
+        # TODO improve to process the air mass raster instead of scalar mean value
+        self.Twv_ = prod.Twv_lut.Twv.sel(wl=self.wl).interp(air_mass=prod.air_mass_mean)
         self.Twv_['wl'] = self.Twv_['wl'] / 1000
         self.wl_mic = self.Twv_.wl.values
 
@@ -272,37 +275,38 @@ class water_vapor(solver):
     def func2(self, x, Twv, wl, y):
         return self.toa_simu2(wl, Twv, *x) - y
 
-    def solve(self, x0=[20, -0.04, 0.1]):
+    def solve(self, x0=[2, -0.04, 0.1]):
 
         result = np.ctypeslib.as_ctypes(np.full((self.width, self.height, 6), np.nan))
         shared_array = sharedctypes.RawArray(result._type_, result)
-
+        self.x0=x0
+        data = self.data
         height = self.height
         width = self.width
         block_size = self.prod.block_size
-        data = self.prod.data
-        pix_thresh = self.prod.pix_thresh
-        pixel_number = self.prod.pixel_number
+        pixel_threshold = self.prod.pixel_threshold
+        if list(self.raster.keys()).__contains__('water_pixel_number'):
+            water_pixel_number = self.raster.water_pixel_number
+        else:
+            water_pixel_number = None
 
         global chunk_process
-
         def chunk_process(args):
 
             window_x, window_y = args
 
             tmp = np.ctypeslib.as_array(shared_array)
-            x0 = [20, -0.04, 0.1]
+            #x0 = [20, -0.04, 0.1]
             for ix in range(window_x, min(width, window_x + block_size)):
-
                 for iy in range(window_y, min(height, window_y + block_size)):
-                    if pixel_number is not None:
-                        if pixel_number.isel(x=ix, y=iy).values < pix_thresh:
+                    if water_pixel_number is not None:
+                        if water_pixel_number.isel(x=ix, y=iy).values < pixel_threshold:
                             continue
 
                     y = data.isel(x=ix, y=iy).dropna(dim='wl')
                     # sigma = Rtoa_std.isel(x=ix,y=iy).dropna(dim='wl')
                     # TODO put solver parameter in self instance
-                    res_lsq = least_squares(self.func, x0, args=(self.Twv_, self.wl_mic, y),
+                    res_lsq = least_squares(self.func, self.x0, args=(self.Twv_, self.wl_mic, y),
                                             bounds=([0, -10, 0], [60, 1, 1]),
                                             diff_step=1e-2, xtol=1e-2, ftol=1e-2, max_nfev=20)
                     x0 = res_lsq.x
@@ -317,28 +321,149 @@ class water_vapor(solver):
             return
 
         window_idxs = [(i, j) for i, j in
-                       itertools.product(range(0, self.width, self.block_size),
-                                         range(0, self.height, self.block_size))]
+                       itertools.product(range(0, width, block_size),
+                                         range(0, height, block_size))]
 
         p = Pool()
         res = p.map(chunk_process, window_idxs)
         result = np.ctypeslib.as_array(shared_array)
 
-        self.gas_img = xr.Dataset(dict(tcwv=(["y", "x"], result[:, :, 0].T),
+        self.water_vapor = xr.Dataset(dict(tcwv=(["y", "x"], result[:, :, 0].T),
                                        tcwv_std=(["y", "x"], result[:, :, 3].T)),
                                   coords=dict(
                                       x=self.x,
                                       y=self.y),
-
                                   attrs=dict(
                                       description="Fitted Total Columnar Water vapor; warning for transmittance computation only",
                                       units="kg/m**2")
                                   )
 
 
+
 class aerosol(solver):
 
-    def __init__(self, prod, raster_name='coarse_masked_raster', variable='Rtoa_masked'):
+    def __init__(self, prod,
+                 aerosol_model='COAV_rh70',
+                 raster_name='coarse_masked_raster',
+                 variable='Rtoa_masked'):
+
         self.prod = prod
-        data = prod.__dict__[raster_name][variable]
-        # remove undesired wavelength
+        self.aerosol_model = aerosol_model
+        self.raster = prod.__dict__[raster_name]
+        # get data for the subset of "water vapor" wavelengths
+        data = self.raster[variable].sel(wl=prod.wl_water_vapor)
+        self.data = data
+        self.width, self.height, self.nwl = data.shape
+        self.x = data.x
+        self.y = data.y
+        self.wl = data.wl
+        wl = self.wl
+        sza=prod.sza_mean
+        vza=prod.vza_mean
+        raa=prod.raa_mean
+        raa_lut = (180-raa) % 360
+        self.sunglint = prod.sunglint_eps['mean'].interp(wl=wl)
+
+        # construct LUT data
+        # sunglint_eps =sunglint_eps / sunglint_eps.sel(wl=wl_glint).mean(dim='wl')
+        self.rot = prod.auxdata.rot.interp(wl=wl) * prod.pressure / prod.pressure_rot_ref
+
+        aot_refs = np.logspace(-3, np.log10(1.5), 100)
+
+        self.aot_hires = prod.aero_lut.sel(model=aerosol_model).aot.interp(wl=wl, method='quadratic').interp(aot_ref=aot_refs,
+                                                                                                method='quadratic')  # sel(wl=wl_glint)
+        self.Rtoa_lut_hires = prod.aero_lut.sel(model=aerosol_model).I.sel(sza=sza, vza=vza, azi=raa_lut, method='nearest') \
+                             .squeeze().interp(wl=wl, method='quadratic').interp(aot_ref=aot_refs,
+                                                                                 method='quadratic') / np.cos(
+            np.radians(sza))
+
+        self.aot_ = self.aot_hires.sel(wl=self.wl_atmo)
+        self.rot_ = self.rot.sel(wl=self.wl_atmo)
+        self.Rtoa_lut_ = self.Rtoa_lut_hires.sel(wl=self.wl_atmo)
+        self.sunglint_eps_ = self.sunglint_eps.sel(wl=self.wl_atmo)
+
+    def transmittance_dir(self,aot, M, rot=0):
+        return np.exp(-(rot + aot) * M)
+
+    def toa_simu(self,aot, rot, Rtoa_lut, sunglint_eps, aot_ref, BRDFg):
+        '''
+        '''
+        aot = aot.interp(aot_ref=aot_ref)
+        Rdiff = Rtoa_lut.interp(aot_ref=aot_ref)
+        Tdir = self.transmittance_dir(aot, self.air_mass_mean, rot=rot)
+        sunglint_corr = Tdir * sunglint_eps
+        Rdir = sunglint_corr * BRDFg / Tdir.sel(wl=self.wl_sunglint).mean(dim='wl')
+        # sunglint_toa.Rtoa.plot(x='wl',hue='aot_ref',ax=axs[0])
+
+        return Rdiff + Rdir
+
+    def func(self,x, aot, rot, Rtoa_lut, sunglint_eps, y):
+        return (self.toa_simu( aot, rot, Rtoa_lut, sunglint_eps, *x) - y)   # /sigma
+
+    def solve(self, x0=[0.1, 0.]):
+
+        result = np.ctypeslib.as_ctypes(np.full((self.width, self.height, 6), np.nan))
+        shared_array = sharedctypes.RawArray(result._type_, result)
+        self.x0 = x0
+        data = self.data
+        height = self.height
+        width = self.width
+        block_size = self.prod.block_size
+        pixel_threshold = self.prod.pixel_threshold
+        if list(self.raster.keys()).__contains__('water_pixel_number'):
+            water_pixel_number = self.raster.water_pixel_number
+        else:
+            water_pixel_number = None
+
+        global chunk_process
+
+        def chunk_process(args):
+            window_x, window_y = args
+            tmp = np.ctypeslib.as_array(shared_array)
+
+            for ix in range(window_x, min(width, window_x + block_size)):
+                for iy in range(window_y, min(height, window_y + block_size)):
+                    if water_pixel_number is not None:
+                        if water_pixel_number.isel(x=ix, y=iy).values < pixel_threshold:
+                            continue
+                    x0 = self.x0
+                    y = data.isel(x=ix, y=iy).dropna(dim='wl')
+                    # sigma = Rtoa_std.isel(x=ix,y=iy).dropna(dim='wl')
+
+                    res_lsq = least_squares(self.func, x0, args=(self.aot_, self.rot_, self.Rtoa_lut_, self.sunglint_eps_, y),
+                                            bounds=([0.002, 0], [1.45, 1.3]), diff_step=1e-2, xtol=1e-2, ftol=1e-2, max_nfev=20)
+                    # except:
+                    # print(wl_,aot_,rot_,Rtoa_lut_,sunglint_eps_, y)
+                    #    break
+                    x0 = res_lsq.x
+                    resVariance = (res_lsq.fun ** 2).sum() / (len(res_lsq.fun) - len(res_lsq.x))
+                    hess = np.matmul(res_lsq.jac.T, res_lsq.jac)
+
+                    try:
+                        hess_inv = np.linalg.inv(hess)
+                        std = self.errFit(hess_inv, resVariance)
+                    except:
+                        std = [np.nan, np.nan]
+                    tmp[ix, iy, :] = [*x0, *std]
+
+
+        window_idxs = [(i, j) for i, j in
+                       itertools.product(range(0, width, block_size),
+                                         range(0, height, block_size))]
+
+        p = Pool()
+        res = p.map(chunk_process, window_idxs)
+        result = np.ctypeslib.as_array(shared_array)
+
+        self.aero_img = xr.Dataset(dict(aot_ref=(["y", "x"], result[:, :, 0].T),
+                                   brdfg=(["y", "x"], result[:, :, 1].T),
+                                   aot_ref_std=(["y", "x"], result[:, :, 2].T),
+                                   brdfg_std=(["y", "x"], result[:, :, 3].T)
+                                   ),
+                              coords=dict(
+                                  x=self.x,
+                                  y=self.y),
+                              attrs=dict(
+                                  description="aerosol and sunglint retrieval from corase resoltion data",
+                                  aerosol_model=self.aerosol_model)
+                              )
