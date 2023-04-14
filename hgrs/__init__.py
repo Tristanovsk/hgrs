@@ -7,5 +7,5 @@ v1.0.4 reorganizing modules
 '''
 __version__ = '1.0.4'
 
-from .metadata import atmosphere,solar_irradiance
+from .auxdata import auxdata, solar_irradiance
 from .hgrs_kernel import algo, water_vapor, aerosol, product
