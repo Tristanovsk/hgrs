@@ -150,7 +150,7 @@ def read_L1C_data(L1C_filepath: str,
     # solar irradiance convolution to the PRISMA spectral response function and scaled
     # by the day of the year
     solar_irr = solar_irradiance()
-    F0 = solar_irr.kurucz
+    F0 = solar_irr.gueymard # kurucz
     DOY = datetime.datetime.strptime(ds.attrs["Product_StartTime"].decode('UTF-8'),
                                      "%Y-%m-%dT%H:%M:%S.%f").timetuple().tm_yday
     U = 1 - 0.01672 * np.cos(0.9856 * (DOY - 4))

@@ -24,13 +24,21 @@ opj = os.path.join
 
 l1cdir = '/sat_data/satellite/acix-iii/AERONET-OC'
 workdir='/media/harmel/TOSHIBA EXT/acix-iii'
-sites = os.listdir(workdir)
-
+sites = next(os.walk(workdir))[1]
+sites.remove('v0')
 wl_rgb=[30, 20, 6]
 gamma=0.5
 brightness_factor=1
 #workdir = '/sat_data/satellite/acix-iii'
-#sites = ['Wendtorf', 'Varese', 'Venice_Lagoon', 'Geneve', 'Garda', 'Trasimeno']
+
+l1cdir = '/sat_data/satellite/acix-iii'
+sites = ['Wendtorf', 'Varese', 'Venice_Lagoon', 'Geneve', 'Garda', 'Trasimeno']
+odir='/sat_data/satellite/acix-iii/fig/L2A'
+
+l1cdir = '/data/data/satellite/prisma/zoffoli'
+workdir='/data/data/satellite/prisma/zoffoli/L2A'
+odir = '/data/data/satellite/prisma/zoffoli/L2A'
+sites=['']
 
 for site in sites:
     workdir_ =opj(workdir,site)
@@ -40,7 +48,7 @@ for site in sites:
     for img_path in glob.glob(opj(workdir_,'*L2A*.nc')):
         basename = os.path.basename(img_path)
 
-        figname = opj('/sat_data/satellite/acix-iii/fig/L2A', site + '_' + basename.replace('.nc', '.png'))
+        figname = opj(odir, site + '_' + basename.replace('.nc', '.png'))
         print(img_path)
         if os.path.exists(figname):
             #pass
