@@ -6,7 +6,7 @@
 If you want to get visualization tool, you first need to install the following libraries (more secure with Anaconda):
 
 ```
-conda install -c conda-forge gdal pyproj rasterio datashader cartopy hvplot geoviews jupyter jupyterlab dask rioxarray
+conda install -c conda-forge hvplot bokeh panel datashader jupyter jupyterlab
 ```
 
 ### Installing
@@ -15,7 +15,7 @@ First, clone [the repository](https://github.com/Tristanovsk/prismapy#) and exec
 local copy:
 
 ```
-python setup.py install 
+pip install . 
 ```
 
 

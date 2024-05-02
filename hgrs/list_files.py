@@ -21,49 +21,47 @@ import hgrs
 opj = os.path.join
 
 info=[]
-for case in [0,1]:
-    if case == 0:
-        workdir_ = '/sat_data/satellite/acix-iii/AERONET-OC'
-        sites = ['galataplatform', 'sanmarcoplatform', 'zeebrugge', 'lisco', 'lakeerie', 'casablanca', 'irbelighthouse',
-                 'ariaketower', 'kemigawa', 'uscseaprism', 'section7', 'southgreenbay', 'palgrunden', 'venezia', 'lucinda',
-                 'bahiablanca', 'socheongcho', 'wavecissite', 'lakeokeechobee', 'gustavdalentower']
-    else:
-        workdir_ = '/sat_data/satellite/acix-iii'
-        sites = ['Wendtorf', 'Varese', 'Geneve', 'Venice_Lagoon', 'Garda', 'Trasimeno']
+project_name='zoffoli'
+project_name='albufera'
+
+workdir_ = '/data/satellite/prisma/'+project_name+'/L1'
+
+sites = [workdir_] #glob.glob(opj(workdir_,'*/'))
+
+for site in sites:
+
+    workdir = opj(workdir_, site)
+
+    for l1c_path in glob.glob(opj(workdir, '*L1_STD_OFFL*.he5')):
+
+        l1c = os.path.basename(l1c_path)
+
+        l2c = l1c.replace('L1_STD_OFFL', 'L2C_STD')
+        l2c_path = opj(workdir, l2c)
+
+        # ---------------------------------------
+        # construct L1C image plus angle rasters
+        # ---------------------------------------
+        try:
+            # dc_l1c = driver.read_L1C_data(l1c_path, reflectance_unit=True, drop_vars=True)
+            ds = h5py.File(l2c_path)
+            lat = np.mean(ds["/HDFEOS/SWATHS/PRS_L2C_HCO/Geolocation Fields/Latitude"][:].T)
+            lon = np.mean(ds["/HDFEOS/SWATHS/PRS_L2C_HCO/Geolocation Fields/Longitude"][:].T)
+            date = ds.attrs["Product_StartTime"].decode('UTF-8')
+
+        except:
+            print('problem with file : ', l2c_path)
+
+        # Geolocation
 
 
-    for site in sites:
-
-        workdir = opj(workdir_, site)
-
-        for l1c_path in glob.glob(opj(workdir, '*L1_STD_OFFL*.he5')):
-
-            l1c = os.path.basename(l1c_path)
-
-            l2c = l1c.replace('L1_STD_OFFL', 'L2C_STD')
-            l2c_path = opj(workdir, l2c)
-
-            # ---------------------------------------
-            # construct L1C image plus angle rasters
-            # ---------------------------------------
-            try:
-                # dc_l1c = driver.read_L1C_data(l1c_path, reflectance_unit=True, drop_vars=True)
-                ds = h5py.File(l2c_path)
-                lat = np.mean(ds["/HDFEOS/SWATHS/PRS_L2C_HCO/Geolocation Fields/Latitude"][:].T)
-                lon = np.mean(ds["/HDFEOS/SWATHS/PRS_L2C_HCO/Geolocation Fields/Longitude"][:].T)
-                date = ds.attrs["Product_StartTime"].decode('UTF-8')
-
-            except:
-                print('problem with file : ', l2c_path)
-
-            # Geolocation
-
-
-            info.append([l1c,lon,lat,date])
+        info.append([l1c,lon,lat,date])
 
 df = pd.DataFrame(info,columns=['file','lon','lat','date'])
-df.to_csv('/sat_data/satellite/acix-iii/info_acix_prisma.csv',index=False)
-df = pd.read_csv('/sat_data/satellite/acix-iii/info_acix_prisma.csv')
+ofile='/data/satellite/prisma/'+project_name+'/info_'+project_name+'_prisma.csv'
+df.to_csv(ofile,index=False)
+
+df = pd.read_csv(ofile)
 
 def get_cams(lon,lat,date,dir='./',
              type='cams-global-atmospheric-composition-forecasts',
@@ -80,6 +78,7 @@ def get_cams(lon,lat,date,dir='./',
     # slicing
     cams = cams.sel(time=date, method='nearest')
     return cams.sel(latitude=lat, longitude=lon,method='nearest')
+
 odir='/DATA/projet/magellium/acix-iii/'
 idir='/media/harmel/vol1/Dropbox/satellite/S2/cnes/CAMS'
 for idx,_ in df.iterrows():

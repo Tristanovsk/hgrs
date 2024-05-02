@@ -1,10 +1,4 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Created on Tue Jan 17 09:11:42 2023
 
-@author: damali
-"""
 import os
 
 import numpy as np
@@ -26,90 +20,6 @@ import datetime
 from hgrs import solar_irradiance
 
 
-
-
-# ******************************************************************************************************
-# dir, filename = os.path.split(__file__)
-#
-# thuillier_file = resource_filename(__package__, '../data/aux/ref_atlas_thuillier3.nc')
-# gueymard_file = resource_filename(__package__, '../data/aux/NewGuey2003.dat')
-# kurucz_file = resource_filename(__package__, '../data/aux/kurucz_0.1nm.dat')
-# sunglint_eps_file = resource_filename(__package__, '../data/aux/mean_rglint_small_angles_vza_le_12_sza_le_60.txt')
-# rayleigh_file = resource_filename(__package__, '../data/aux/rayleigh_bodhaine.txt')
-
-
-
-
-#
-# # TODO remove (deprecated)
-# def convolve_ISRF(init_wl: np.array, init_spectrum: np.array, new_wl: np.array, fwhm: np.array):
-#     '''
-#
-#     :param init_wl:
-#     :param init_spectrum:
-#     :param new_wl:
-#     :param fwhm:
-#     :return:
-#     '''
-#     # =============================================================================
-#     # Prepare stuff
-#     # =============================================================================
-#     # obj.I0 = convolve_ISRF(irr_wl, irr_dat, obj.wl, obj.isrf.fwhm, 'gaussmf')'
-#     if len(fwhm) == 1:
-#         fwhm = np.ones(new_wl.shape) * fwhm
-#     N_new_wl = len(new_wl)
-#     ksize = np.ones(new_wl.shape) * 200
-#     Bmin = new_wl - ksize * fwhm / 100
-#     Bmax = new_wl + ksize * fwhm / 100
-#     res = np.zeros(new_wl.shape)
-#
-#     # =============================================================================
-#     # Perform convoluion for each new wavelength
-#     # =============================================================================
-#     for ii in range(N_new_wl):
-#         # Locate wavelenghts of the intitial spectra to perform the convolution
-#         ii_wl = (init_wl >= Bmin[ii]) & (init_wl <= Bmax[ii])
-#         x = init_wl[ii_wl]
-#         y = init_spectrum[ii_wl]
-#         # Calculate ISRF
-#         # ISRF = isrfCalculation(auxwl,C(i),FWHM(i),[],model);
-#         # function isrf = isrfCalculation(wl,C,FWHM,P,model)
-#         sig = fwhm[ii] / 2.3548
-#         ISRF = np.exp(-(x - new_wl[ii]) * (x - new_wl[ii]) / (2 * sig * sig))
-#         # Convolve data with ISRF
-#         res[ii] = scipy.integrate.simpson(y * ISRF, x) / scipy.integrate.simpson(ISRF, x)
-#     return res
-#
-#
-# # TODO remove (deprecated)
-# def load_thuillier_solar_spectrum(prisma_wl: np.array, prisma_fwhm: np.array):
-#     '''
-#
-#     :param prisma_wl:
-#     :param prisma_fwhm:
-#     :return:
-#     '''
-#     # =============================================================================
-#     # Load solar irradiance
-#     # =============================================================================
-#     ds = nc.Dataset(thuillier_file)
-#     I0_mW = (ds["data"][:]).ravel()
-#     I0_wl = ds["wavelength"][:]
-#
-#     # =============================================================================
-#     # Extrapolate to the SWIR
-#     # =============================================================================
-#     x_new = np.arange(I0_wl[-1], 2510.1, 0.1)
-#     extrap = scipy.interpolate.interp1d(I0_wl, I0_mW, kind="linear", fill_value="extrapolate")(x_new)
-#     I0_mW = np.append(I0_mW, extrap)
-#     I0_wl = np.append(I0_wl, x_new)
-#
-#     # =============================================================================
-#     # Convolve with the PRISMA ISRF (gaussian)
-#     # =============================================================================
-#     I0_mW_conv = convolve_ISRF(I0_wl, I0_mW, prisma_wl, prisma_fwhm)
-#
-#     return I0_mW_conv
 
 
 def read_L1C_data(L1C_filepath: str,
@@ -150,12 +60,12 @@ def read_L1C_data(L1C_filepath: str,
     # solar irradiance convolution to the PRISMA spectral response function and scaled
     # by the day of the year
     solar_irr = solar_irradiance()
-    F0 = solar_irr.gueymard # kurucz
+    F0 = solar_irr.tsis #huillier # gueymard # kurucz
     DOY = datetime.datetime.strptime(ds.attrs["Product_StartTime"].decode('UTF-8'),
                                      "%Y-%m-%dT%H:%M:%S.%f").timetuple().tm_yday
     U = 1 - 0.01672 * np.cos(0.9856 * (DOY - 4))
     F0 = F0 * U
-    F0_sensor = solar_irr.convolve(F0, fwhm, info={'description': 'Convolved solar irradiance from Kurucz data',
+    F0_sensor = solar_irr.convolve(F0, fwhm, info={'description': 'Convolved solar irradiance from TSIS data',
                                                    'unit': 'mW/m2/nm'})
     # DN to TOA radiance
     gain = {"vnir": ds.attrs["ScaleFactor_Vnir"],

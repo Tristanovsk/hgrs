@@ -65,6 +65,8 @@ sites=[  ['ariaketower','ARIAKE_TOWER'],
          ['wavecissite','WaveCIS_Site_CSI_6'],
          ['zeebrugge','Zeebrugge-MOW1']]
 
+#sites=[  ['rio_plata','RdP-EsNM']]
+
 irr = dl.irradiance()
 irr.load_F0()
 
@@ -73,17 +75,24 @@ params = ['Lwn','Lwn_IOP','Lwn_f/Q']
 Ttot_Ed=xr.open_dataset('/DATA/git/satellite_app/hgrs/data/lut/transmittance_downward_irradiance.nc')
 ratio_kurucz_thuillier=xr.open_dataarray('/DATA/git/satellite_app/hgrs/data/aux/ratio_kurucz_thuillier.nc')
 ratio_kurucz_gueymard=xr.open_dataarray('/DATA/git/satellite_app/hgrs/data/aux/ratio_kurucz_gueymard.nc')
+lut_file = '/DATA/git/satellite_app/hgrs/data/lut/opac_osoaa_lut_v3.nc'
+aero_lut = xr.open_dataset(lut_file)
+aero_lut['wl']=aero_lut['wl']*1000
 
 def find_nearest(arr, lon, lat):
     abslat = np.abs(arr.lat - lat)
     abslon = np.abs(arr.lon - lon)
     dist = np.maximum(abslon, abslat)
-    return np.unravel_index(dist.argmin(), arr.lon.shape)
+    # warning x,y from numpy and xarray are inverted
+    id_y, id_x = np.unravel_index(dist.argmin(), arr.lon.shape)
+    return id_x, id_y
 
 # ---------------------------------------------
 # Main loop
 # ---------------------------------------------
-with PdfPages(opj(odir,'fig','prisma_aeronet_matchup_toa2boa.pdf')) as pdf:
+suff='v2'
+#suff=''
+with PdfPages(opj(odir,'fig','prisma_aeronet_matchup_acix'+suff+'.pdf')) as pdf:
     for site in sites:
         prisma_site,aeronet_site = site
         #if os.path.exists(opj(odir, 'fig', 'Rrs_matchup_' + aeronet_site + '.png')):
@@ -121,7 +130,8 @@ with PdfPages(opj(odir,'fig','prisma_aeronet_matchup_toa2boa.pdf')) as pdf:
         # Load PRISMA data
         # ---------------------------------------------
         dc=[]
-        for file in sorted(glob.glob(opj(workdir,prisma_site,'*.nc'))):
+        for file in sorted(glob.glob(opj(workdir,prisma_site,'*'+suff+'*.nc'))):
+
             print(file)
             img =xr.open_dataset(file)
             date = dt.datetime.strptime(img.acquisition_date,'%Y-%m-%dT%H:%M:%S.%f')
@@ -133,17 +143,19 @@ with PdfPages(opj(odir,'fig','prisma_aeronet_matchup_toa2boa.pdf')) as pdf:
             aot_ref= np.nanmean(img.aot_ref)
             model = img.aerosol_model
             wl =img.wl
-            ratio_irr = ratio_kurucz_gueymard.interp(wl=wl)
-            Ttot_Ed_ = Ttot_Ed.Ttot_Ed.sel(model=model).interp(sza=sza, method='cubic').interp(aot_ref=aot_ref, method='quadratic').interp(wl=wl, method='cubic')
-            Ttot_Lu_ = Ttot_Ed.Ttot_Ed.sel(model=model).interp(sza=vza, method='cubic').interp(aot_ref=aot_ref, method='quadratic').interp(wl=wl, method='cubic')**1.05
-            Ttot = (Ttot_Ed_ *Ttot_Lu_).reset_coords(drop=True)
-            param = 'Rrs' #Rtoa'
-            #img = prod[['Rtoa','Ltoa']]
-            img['Rrs_corr'] = img[param]/Ttot * ratio_irr**5
+            #ratio_irr = ratio_kurucz_gueymard.interp(wl=wl)
+            if False:
+                Ttot_Ed_ = Ttot_Ed.Ttot_Ed.sel(model=model).interp(sza=sza, method='cubic').interp(aot_ref=aot_ref, method='quadratic').interp(wl=wl, method='cubic')
+                Ttot_Lu_ = Ttot_Ed.Ttot_Ed.sel(model=model).interp(sza=vza, method='cubic').interp(aot_ref=aot_ref, method='quadratic').interp(wl=wl, method='cubic')**1.05
+                Ttot = (Ttot_Ed_ *Ttot_Lu_).reset_coords(drop=True)
+                param = 'Rrs' #Rtoa'
+                #img = prod[['Rtoa','Ltoa']]
+                img[param] = img[param]/Ttot #* ratio_irr**5
 
             dc.append(img)
 
-
+        if len(dc)==0:
+            continue
         # ---------------------------------------------
         # Plot match-up data
         # ---------------------------------------------
@@ -171,8 +183,8 @@ with PdfPages(opj(odir,'fig','prisma_aeronet_matchup_toa2boa.pdf')) as pdf:
 
             for i in range(6):
                 for j in range(6):
-                    img.Rrs.isel(x=xcenter+i-2,y=ycenter+j-2).plot(x='wl',color='grey',alpha=0.5,lw=0.7,ax=axs[i_])#,label='PRISMA')
-                    img.Rrs_corr.isel(x=xcenter+i-2,y=ycenter+j-2).plot(x='wl',color='black',alpha=0.5,lw=0.7,ax=axs[i_])#,label='PRISMA')
+                    img.Rrs.isel(x=xcenter+i-2,y=ycenter+j-2).plot(x='wl',color='black',alpha=0.5,lw=0.7,ax=axs[i_])#,label='PRISMA')
+                    #img.Rrs_corr.isel(x=xcenter+i-2,y=ycenter+j-2).plot(x='wl',color='black',alpha=0.5,lw=0.7,ax=axs[i_])#,label='PRISMA')
             for param in params:
                 ds['Rrs_'+param].sel(date=str(date),method='nearest').dropna('wl').plot(x='wl',marker='o',ms=4,label=param,ax=axs[i_])
             axs[i_].set_ylabel('$R_{rs}\ (sr^{-1})$')
@@ -183,7 +195,7 @@ with PdfPages(opj(odir,'fig','prisma_aeronet_matchup_toa2boa.pdf')) as pdf:
         axs[0].set_xlim(390,1050)
         #plt.tight_layout()
         plt.suptitle(aeronet_site)
-        plt.savefig(opj(odir,'fig','Rrs_matchup_'+aeronet_site+'_v3.png'),dpi=300 )
+        plt.savefig(opj(odir,'fig','Rrs_matchup_'+aeronet_site+suff+'.png'),dpi=300 )
         pdf.savefig()
         plt.close()
 
@@ -206,14 +218,17 @@ with PdfPages(opj(odir,'fig','prisma_aeronet_matchup_toa2boa.pdf')) as pdf:
 
             for i in range(6):
                 for j in range(6):
-                    axs[i_].plot(550,img.aot_ref_full.isel(x=xcenter+i-2,y=ycenter+j-2).values,color='black',marker='o',ms=5,alpha=0.5)
+                    aot_ref=img.aot_ref_full.isel(x=xcenter+i-2,y=ycenter+j-2).values
+                    axs[i_].plot(550,aot_ref,color='black',marker='o',ms=5,alpha=0.5)
+                    aero_lut.aot.sel(model=img.aerosol_model).interp(aot_ref=aot_ref
+                                    ).interp(wl=np.linspace(390,1010,200),method='cubic').plot(ax=axs[i_],lw=1.2,color='black')
             axs[i_].set_title(str(date.date()))
             axs[i_].set_ylabel('$Aerosol\ Optical\ Depth$')
             axs[i_].set_xlabel('$Wavelength\ (nm)$')
             axs[i_].set_title(date.strftime('%Y-%m-%d %H:%M'), fontsize=12)
-
+            axs[i_].legend([img.aerosol_model])
         plt.suptitle(aeronet_site)
 
-        plt.savefig(opj(odir, 'fig', 'AOD_matchup_' + aeronet_site + '.png'), dpi=300)
+        plt.savefig(opj(odir, 'fig', 'AOD_matchup_' + aeronet_site+suff + '.png'), dpi=300)
         pdf.savefig()
         plt.close()

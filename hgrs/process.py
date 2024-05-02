@@ -91,7 +91,7 @@ prod.get_wv_transmittance_raster(wv_full)
 prod.water_vapor_correction(raster_name='raster', variable='Rtoa_masked')
 
 Rdiff_full = aero_retrieval.atmo_img.Rtoa_diff #.interp(x=prod.raster.x, y=prod.raster.y)
-Tdir_full = aero_retrieval.atmo_img.Tdir# .interp(x=prod.raster.x, y=prod.raster.y)
+Tdir_full = aero_retrieval.atmo_img.Tdir # .interp(x=prod.raster.x, y=prod.raster.y)
 Rcorr = (prod.raster.Rtoa_masked - Rdiff_full)
 wl_sunglint = prod.wl_sunglint
 sunglint_eps = aero_retrieval.sunglint_eps

@@ -20,8 +20,8 @@ import hgrs
 opj = os.path.join
 
 
-workdir = '/data/data/satellite/prisma/zoffoli'
-odir = '/data/data/satellite/prisma/zoffoli/L2A'
+workdir = '/data/satellite/prisma/berre'
+odir = '/data/satellite/prisma/berre/L2A'
 if not os.path.exists(odir):
     os.mkdir(odir)
 

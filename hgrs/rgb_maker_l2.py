@@ -22,8 +22,8 @@ opj = os.path.join
 
 
 
-l1cdir = '/sat_data/satellite/acix-iii/AERONET-OC'
-workdir='/media/harmel/TOSHIBA EXT/acix-iii'
+l1cdir = '/data/satellite/acix-iii/AERONET-OC'
+workdir='/data/acix-iii'
 sites = next(os.walk(workdir))[1]
 sites.remove('v0')
 wl_rgb=[30, 20, 6]
@@ -31,30 +31,53 @@ gamma=0.5
 brightness_factor=1
 #workdir = '/sat_data/satellite/acix-iii'
 
-l1cdir = '/sat_data/satellite/acix-iii'
+l1cdir = '/data/satellite/acix-iii'
 sites = ['Wendtorf', 'Varese', 'Venice_Lagoon', 'Geneve', 'Garda', 'Trasimeno']
-odir='/sat_data/satellite/acix-iii/fig/L2A'
+odir='/data/satellite/acix-iii/fig/L2A'
+#
+# l1cdir = '/data/data/satellite/prisma/zoffoli'
+# workdir='/data/data/satellite/prisma/zoffoli/L2A'
+# odir = '/data/data/satellite/prisma/zoffoli/L2A'
+# sites=['']
 
-l1cdir = '/data/data/satellite/prisma/zoffoli'
-workdir='/data/data/satellite/prisma/zoffoli/L2A'
-odir = '/data/data/satellite/prisma/zoffoli/L2A'
-sites=['']
+l1cdir = '/data/acix-iii/Second_Batch/L1'#/AERONET-OC'
+workdir='/data/acix-iii/Second_Batch/L2A'
+sites = next(os.walk(workdir))[1]
+odir='/data/acix-iii/Second_Batch/fig'
 
+
+l1cdir = '/data/satellite/prisma/zoffoli/L1'#/AERONET-OC'
+workdir='/data/satellite/prisma/zoffoli/L2A'
+sites = ['']
+odir='/data/satellite/prisma/zoffoli/fig'
+pattern = 'L2A_hGRSv2'
+
+l1cdir = '/data/satellite/prisma/berre/L1C'#/AERONET-OC'
+workdir='/data/satellite/prisma/berre/L2A'
+sites = ['']
+odir='/data/satellite/prisma/berre/fig'
+pattern = 'L2A_hGRS'
+
+l1cdir = '/data/acix-iii/Third_Batch/L1'#/AERONET-OC'
+workdir='/data/acix-iii/Third_Batch/L2A'
+sites = [''] #next(os.walk(workdir))[1]
+odir='/data/acix-iii/Third_Batch/fig'
+pattern = 'L2A_hGRSv2'
 for site in sites:
     workdir_ =opj(workdir,site)
     if not os.path.isdir(workdir_):
         continue
     l1cdir_ = opj(l1cdir,site)
-    for img_path in glob.glob(opj(workdir_,'*L2A*.nc')):
+    for img_path in glob.glob(opj(workdir_,'*'+pattern+'*.nc')):
         basename = os.path.basename(img_path)
 
         figname = opj(odir, site + '_' + basename.replace('.nc', '.png'))
         print(img_path)
         if os.path.exists(figname):
-            #pass
-            continue
+            pass
+            #continue
 
-        l1c_path = opj(l1cdir_,basename.replace('.nc','.he5').replace( 'L2A_hGRS','L1_STD_OFFL'))
+        l1c_path = opj(l1cdir_,basename.replace('.nc','.he5').replace( pattern,'L1_STD_OFFL'))
         dc_l1c = driver.read_L1C_data(l1c_path, reflectance_unit=True, drop_vars=True)
 
         img = xr.open_dataset(img_path)
@@ -66,7 +89,7 @@ for site in sites:
         ax.axes.set_aspect('equal')
 
         rgb = img.Rrs.isel(wl=wl_rgb)
-        adj = xr.DataArray([1.2, 1, 2], coords={"wl": rgb.wl})
+        adj = xr.DataArray([1.2, 1, 1], coords={"wl": rgb.wl})
         ax = (rgb * adj).plot.imshow(rgb='wl', robust=True, ax=axs[1])
         ax.axes.set_aspect('equal')
 

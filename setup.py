@@ -1,5 +1,3 @@
-# import ez_setup
-# ez_setup.use_setuptools()
 
 from setuptools import setup, find_packages
 
@@ -24,13 +22,13 @@ setup(
     description='driver dedicated to the Level 1C and 2C of the ASI PRISMA imagery',
 
     # Dependent packages (distributions)
-    install_requires=['numpy', 'scipy', 'pandas', 'xarray',
-                      'matplotlib', 'rasterio', 'osgeo','cartopy',
-                      'numba','eoreader',
+    install_requires=['numpy', 'scipy', 'pandas', 'xarray','rioxarray',
+                      'matplotlib', 'rasterio', 'cartopy',
+                      'numba','netcdf4','h5py',
                       'geopandas','affine','shapely','memory_profiler' ],
 
     entry_points={
         'console_scripts': [
-            'hgrs = TODO'
+          #  'hgrs = TODO'
         ]}
 )

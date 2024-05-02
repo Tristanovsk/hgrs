@@ -20,24 +20,10 @@ import hgrs
 opj = os.path.join
 
 
-
-workdir_ = '/data/acix-iii/Second_Batch/L1/AERONET-OC'
-sites = ['galataplatform', 'sanmarcoplatform', 'zeebrugge', 'lisco', 'lakeerie', 'casablanca', 'irbelighthouse',
-          'ariaketower', 'kemigawa', 'uscseaprism', 'section7', 'southgreenbay', 'palgrunden', 'venezia', 'lucinda',
-          'bahiablanca', 'socheongcho', 'wavecissite', 'lakeokeechobee', 'gustavdalentower']
-
-workdir_ = '/data/acix-iii/Second_Batch/L1'
-sites = ['Wendtorf', 'Varese', 'Geneve', 'Venice_Lagoon', 'Garda', 'Trasimeno']
-
-workdir_ = '/data/acix-iii/Third_Batch/L1'
-sites = ['']
-cams_dir = '/DATA/projet/magellium/acix-iii/cams'
-
-#workdir_ = '/data/satellite/prisma/albufera/L1'
-#sites = ['']
-
-odir_ = '/data/acix-iii/Third_Batch/L2A'
-
+workdir_ = '/data/satellite/prisma/zoffoli/L1'
+sites = [workdir_] #glob.glob(opj(workdir_,'*/'))
+cams_dir = '/home/harmel/Dropbox/Dropbox/satellite/CAMS/zoffoli'
+odir = '/data/satellite/prisma/zoffoli/L2A'
 lut_file = '/DATA/git/satellite_app/hgrs/data/lut/opac_osoaa_lut_v3.nc'
 aero_lut = xr.open_dataset(lut_file)
 aero_lut['wl']=aero_lut['wl']*1000
@@ -46,12 +32,9 @@ Ttot_Ed=xr.open_dataset('/DATA/git/satellite_app/hgrs/data/lut/transmittance_dow
 
 
 for site in sites:
-    if site == '':
-        workdir = workdir_
-        odir= odir_
-    else:
-        workdir = opj(workdir_, site)
-        odir = opj(odir_, site)  # /sat_data/satellite/acix-iii/results/',site)
+
+    workdir = opj(workdir_, site)
+    # /sat_data/satellite/acix-iii/results/',site)
     if not os.path.exists(odir):
         os.mkdir(odir)
 
@@ -63,8 +46,8 @@ for site in sites:
 
         ofile = opj(odir, l1c.replace('.he5', '.nc').replace('L1_STD_OFFL', 'L2A_hGRSv2'))
         if os.path.exists(ofile):
-            os.remove(ofile)
-            #continue
+            #os.remove(ofile)
+            continue
 
         print(l1c,ofile)
         l2c = l1c.replace('L1_STD_OFFL', 'L2C_STD')
@@ -95,25 +78,14 @@ for site in sites:
         cams = xr.open_dataset(cams_path)
 
         # select OPAC aerosol model
-        #aod = cams[['aod355', 'aod380', 'aod400', 'aod440', 'aod469', 'aod500', 'aod550', 'aod645', 'aod670',
-        #            'aod800', 'aod865', 'aod1020', 'aod1064', 'aod1240', 'aod1640', 'aod2130']].to_pandas()
-        #aod.index = aod.index.str.replace('aod', '').astype(int)
-        #cams_aod = aod.to_xarray().rename({'index': 'wl'})
-        cams_wls = [469, 550, 670, 865, 1240]
-        param_aod = []
-        for wl in cams_wls:
-            wl_ = str(wl)
-            param_aod.append('aod' + wl_)
-
-        cams_aod = cams[param_aod].to_array(dim='wl')
-
-        wl_cams = cams_aod.wl.str.replace('aod', '').astype(float)
-        cams_aod = cams_aod.assign_coords(wl=wl_cams)
-
+        aod = cams[['aod355', 'aod380', 'aod400', 'aod440', 'aod469', 'aod500', 'aod550', 'aod645', 'aod670',
+                    'aod800', 'aod865', 'aod1020', 'aod1064', 'aod1240', 'aod1640', 'aod2130']].to_pandas()
+        aod.index = aod.index.str.replace('aod', '').astype(int)
+        cams_aod = aod.to_xarray().rename({'index': 'wl'})
 
         rh = '_rh70'
         models = [ 'COAV' + rh, 'COPO' + rh, 'DESE' + rh, 'MACL' + rh, 'MAPO' + rh,
-                  ]#'ANTA' + rh, 'ARCT' + rh,'URBA' + rh
+                  'ANTA' + rh, 'ARCT' + rh]#,'URBA' + rh
         lut_aod = aero_lut.aot.sel(model=models, aot_ref=1).interp(wl=cams_aod.wl)
         idx = np.abs((cams_aod / cams.aod550) - lut_aod).sum('wl').argmin()
         opac_model = aero_lut.sel(model=models).model.values[idx]
@@ -155,18 +127,7 @@ for site in sites:
         variable = 'Rtoa_masked'
         prod.coarse_masked_raster = prod.remove_wl_dataset(
             prod.coarse_masked_raster, prod.wl_to_remove, variable=variable)
-
-        # TODO double check regularization from CAMS AOT values
-        aod550_mean = cams.aod550.mean().values
-
-        aod550_std = cams.aod550.std().values
-        aod550_std = np.max([aod550_std,0.2*aod550_mean])
-
-        aero_retrieval = hgrs.aerosol(prod,
-                                      aerosol_model=opac_model,
-                                      first_guess= [aod550_mean,0.],
-                                      aot550_limits= [aod550_mean-aod550_std,
-                                                      aod550_mean+aod550_std])
+        aero_retrieval = hgrs.aerosol(prod,aerosol_model=opac_model)
         aero_retrieval.solve()
         aero_retrieval.get_atmo_parameters(prod.coarse_masked_raster.wl)
 

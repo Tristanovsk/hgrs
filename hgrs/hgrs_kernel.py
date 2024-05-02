@@ -504,6 +504,8 @@ class aerosol(solver):
 
     def __init__(self, prod,
                  aerosol_model='COAV_rh70',
+                 first_guess=[0.01,0],
+                 aot550_limits=[0.002,1.2],
                  raster_name='coarse_masked_raster',
                  variable='Rtoa_masked'):
 
@@ -512,6 +514,11 @@ class aerosol(solver):
         self.raster = prod.__dict__[raster_name]
         self.auxdata = prod.auxdata
         self.aero_lut = prod.aero_lut
+
+        # set box limits in aod550 for non-linear optimization
+        self.aod550_min = aot550_limits[0]
+        self.aod550_max = aot550_limits[1]
+        self.first_guess = first_guess
 
         # get full resolution parameters
         self.xfull = prod.raster.x
@@ -578,11 +585,14 @@ class aerosol(solver):
     def func(self, x, aot, rot, Rtoa_lut, sunglint_eps, y):
         return (self.toa_simu(aot, rot, Rtoa_lut, sunglint_eps, *x) - y)  # /sigma
 
-    def solve(self, x0=[0.1, 0.]):
+    def solve(self, x0=[0.005, 0.]):
 
         result = np.ctypeslib.as_ctypes(np.full((self.width, self.height, 4), np.nan))
         shared_array = sharedctypes.RawArray(result._type_, result)
+        # TODO clean up method to assign first guess
         self.x0 = x0
+        self.x0 = self.first_guess
+
         data = self.data
         height = self.height
         width = self.width
@@ -609,7 +619,7 @@ class aerosol(solver):
 
                     res_lsq = least_squares(self.func, x0,
                                             args=(self.aot_lut, self.rot, self.Rtoa_lut, self.sunglint_eps, y),
-                                            bounds=([0.002, 0], [1.45, 1.3]), diff_step=1e-2, xtol=1e-2, ftol=1e-2,
+                                            bounds=([self.aod550_min, 0], [self.aod550_max, 1.3]), diff_step=1e-3, xtol=1e-3, ftol=1e-3,
                                             max_nfev=20)
                     # except:
                     # print(wl_,aot_,rot_,Rtoa_lut_,sunglint_eps_, y)
