@@ -619,7 +619,7 @@ class aerosol(solver):
 
                     res_lsq = least_squares(self.func, x0,
                                             args=(self.aot_lut, self.rot, self.Rtoa_lut, self.sunglint_eps, y),
-                                            bounds=([self.aod550_min, 0], [self.aod550_max, 1.3]), diff_step=1e-3, xtol=1e-3, ftol=1e-3,
+                                            bounds=([self.aod550_min, 0], [self.aod550_max, 1.3]), diff_step=1e-3, xtol=1e-3, ftol=1e-4,
                                             max_nfev=20)
                     # except:
                     # print(wl_,aot_,rot_,Rtoa_lut_,sunglint_eps_, y)

@@ -3,7 +3,7 @@ import glob
 
 import matplotlib as mpl
 
-mpl.use('tkagg')
+#mpl.use('tkagg')
 import matplotlib.pyplot as plt
 import colorcet as cc
 

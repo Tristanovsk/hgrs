@@ -63,8 +63,16 @@ workdir='/data/acix-iii/Third_Batch/L2A'
 sites = [''] #next(os.walk(workdir))[1]
 odir='/data/acix-iii/Third_Batch/fig'
 pattern = 'L2A_hGRSv2'
+
+l1cdir = '/data/satellite/prisma/touria'#/AERONET-OC'
+workdir='/data/satellite/prisma/touria'
+sites = ['bassas','glorieuse','mayotte'] #next(os.walk(workdir))[1]
+odir='/data/satellite/prisma/touria/fig'
+pattern = 'L2A_hgrs'
+
+
 for site in sites:
-    workdir_ =opj(workdir,site)
+    workdir_ =opj(workdir,site,'L2A')
     if not os.path.isdir(workdir_):
         continue
     l1cdir_ = opj(l1cdir,site)
@@ -77,7 +85,7 @@ for site in sites:
             pass
             #continue
 
-        l1c_path = opj(l1cdir_,basename.replace('.nc','.he5').replace( pattern,'L1_STD_OFFL'))
+        l1c_path = opj(l1cdir_,'L1',basename.replace('.nc','.he5').replace( pattern,'L1_STD_OFFL'))
         dc_l1c = driver.read_L1C_data(l1c_path, reflectance_unit=True, drop_vars=True)
 
         img = xr.open_dataset(img_path)

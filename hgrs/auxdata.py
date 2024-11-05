@@ -37,7 +37,7 @@ class auxdata():
     def __init__(self, wl=None):
         # load data from raw files
         self.solar_irr = solar_irradiance()
-        self.sunglint_eps = pd.read_csv(sunglint_eps_file, sep='\s+', index_col=0).to_xarray()
+        self.sunglint_eps = pd.read_csv(sunglint_eps_file, sep=r'\s+', index_col=0).to_xarray()
         self.rayleigh()
         self.pressure_rot_ref = 1013.25
 
@@ -107,7 +107,7 @@ class solar_irradiance():
         Open Thuillier data and convert them into xarray in mW/m2/nm
         :return:
         '''
-        solar_irr = pd.read_csv(gueymard_file, sep='\s+', skiprows=30, header=None)
+        solar_irr = pd.read_csv(gueymard_file, sep=r'\s+', skiprows=30, header=None)
         solar_irr.columns = ['wl', 'data']
         solar_irr = solar_irr.set_index('wl').data.to_xarray()
         # keep spectral range of interest UV-SWIR
@@ -121,7 +121,7 @@ class solar_irradiance():
         Open Kurucz data and convert them into xarray in mW/m2/nm
         :return:
         '''
-        solar_irr = pd.read_csv(kurucz_file, sep='\s+', skiprows=11, header=None)
+        solar_irr = pd.read_csv(kurucz_file, sep=r'\s+', skiprows=11, header=None)
         solar_irr.columns = ['wl', 'data']
         solar_irr = solar_irr.set_index('wl').data.to_xarray()
         # keep spectral range of interest UV-SWIR

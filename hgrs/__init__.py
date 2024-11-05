@@ -10,3 +10,11 @@ __version__ = '1.0.5'
 
 from .auxdata import auxdata, solar_irradiance
 from .hgrs_kernel import algo, water_vapor, aerosol, product
+
+import logging
+
+#init logger
+logger = logging.getLogger()
+
+level = logging.getLevelName("INFO")
+logger.setLevel(level)

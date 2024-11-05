@@ -16,10 +16,10 @@ setup(
     include_package_data=True,
 
     url='',
-    license='MIT',
-    authors='D. Malik, J. Vicent, T. Harmel',
-    author_email='daria.malik@magellium.fr,tristan.harmel@magellium.fr; ',
-    description='driver dedicated to the Level 1C and 2C of the ASI PRISMA imagery',
+    license='Apache v2',
+    authors='T. Harmel',
+    author_email='tristan.harmel@magellium.fr; ',
+    description='Hyperspectral Glint Removal System: Atmospheric correction for aquatic scenes of hyperspectral (vis-SWIR) satellite images',
 
     # Dependent packages (distributions)
     install_requires=['numpy', 'scipy', 'pandas', 'xarray','rioxarray',
@@ -29,6 +29,6 @@ setup(
 
     entry_points={
         'console_scripts': [
-          #  'hgrs = TODO'
+            'hgrs = hgrs.run:main'
         ]}
 )
