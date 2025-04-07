@@ -89,9 +89,10 @@ def main():
     process_ = Process()
     process_.execute(l1_path,
                      l2_path,
-                     cams_file,
-                     outfile
+                     cams_file
                      )
+
+    process_.write_output(outfile)
 
     return
 

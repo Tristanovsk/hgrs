@@ -35,8 +35,8 @@ class Process():
     def execute(self,
                 l1c_path,
                 l2c_path,
-                cams_path,
-                ofile):
+                cams_path
+                ):
 
         # ---------------------------------------
         # Load pre-computed radiative transfer LUT
@@ -61,6 +61,9 @@ class Process():
         for param in ['sza', 'vza', 'raa']:
             dc_l1c[param] = dc_l2c[param]
         del dc_l2c
+
+        # get L1C object
+        self.l1_prod = dc_l1c
 
         date = dc_l1c.attrs['acquisition_date']
         clon = np.nanmean(dc_l1c.lon)
@@ -323,6 +326,13 @@ class Process():
         for key in keys:
             l2_prod.attrs[key] = str(prod.__dict__[key])
 
+        self.l2_prod =l2_prod
+        self.successful = True
+
+        return
+
+    def write_output(self,
+                     ofile):
         ######################################
         # Write final product
         ######################################
@@ -357,5 +367,6 @@ class Process():
         if not os.path.exists(odir):
             os.mkdir(odir)
 
-        l2_prod.sel(wl=slice(400, 1150)).to_netcdf(ofile, encoding=encoding)
-        l2_prod.close()
+        self.l2_prod.sel(wl=slice(400, 1150)).to_netcdf(ofile, encoding=encoding)
+        #l2_prod.close()
+        return
