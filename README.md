@@ -1,6 +1,8 @@
 # hGRS package
 ## Hyperspectral Glint Removal System for hyperspectral remote sensing of the aquatic environment
 
+# WARNING: this is a working version between collaborators please do not use it as is. Stable version will come soon.
+
 ### Prerequisites
 
 If you want to get visualization tool, you first need to install the following libraries (more secure with Anaconda):
