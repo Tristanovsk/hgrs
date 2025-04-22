@@ -20,6 +20,11 @@ local copy:
 pip install . 
 ```
 
+Optional dependency, if you want to use the reprojection feature for PRISMA please install xemsf:
+
+```commandline
+conda install xesmf
+```
 
 ## Examples
 ![example spectra](fig/check_spectra.png)

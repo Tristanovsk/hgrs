@@ -214,3 +214,5 @@ def read_L2C_data(L2C_filepath: str):
     data = data.assign_coords({'x2': np.arange(x2dim)[::-1], 'y2': np.arange(y2dim)[::-1]})
 
     return data
+
+
