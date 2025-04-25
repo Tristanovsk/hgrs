@@ -16,8 +16,8 @@ import hgrs
 
 opj = os.path.join
 
-HGRSDATA = '/DATA/git/satellite_app/hgrs/data/lut'
-TOALUT = 'opac_osoaa_lut_v3.nc'
+HGRSDATA = '/home/zobesn/data/LUT'
+TOALUT = 'opac_osoaa_lut_v3_light.nc'
 TRANSLUT = 'transmittance_downward_irradiance.nc'
 
 
