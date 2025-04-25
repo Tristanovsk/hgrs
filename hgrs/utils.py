@@ -1,56 +1,54 @@
-# adapted from CRAN R package
+# copyright 2025,  Magellium, J.-P. Burochin
+
 import numpy as np
 import xarray as xr
 
-def geolocation(raster, lon, lat, fill_gaps=True):
-    # TODO current version not working, the method does not seem to be straighforwardly applicable
-    # https://www.harrisgeospatial.com/docs/backgroundgltbowtiecorrection.html
-    #
-    # Estimate the median X and Y coordinates increment from the center column and row
-    # from the GLT.
-    lon, lat = raster.lon.values, raster.lat.values
-    width, height = lon.shape
+import xesmf as xe
 
-    psize_x = np.abs(np.nanmedian(np.diff(lon[:, round(height / 2)])))*4
-    psize_y = np.abs(np.nanmedian(np.diff(lat[round(width / 2), :])))*4
+class reproj():
+    def __init__(self):
+        pass
 
-    # Compute the size of the grid, using the following IDL notation.
-    # The CEIL function returns the closest integer greater than or equal to
-    # its argument.
-    lonmin = np.nanmin(lon)
-    lonmax = np.nanmax(lon)
-    latmin = np.nanmin(lat)
-    latmax = np.nanmax(lat)
+    @staticmethod
+    def regridding(input_dataset, output_grid_size, d_input_crs=4326):
+        """
+        Take a PRISMA L1C product in sensor geometry (x,y) as input and
+        return it in a georeferenced geometry (lon,lat).
 
-    ncols = int(np.ceil((lonmax - lonmin) / psize_x))+1
-    nrows = int(np.ceil((latmax - latmin) / psize_y))+1
+        WARNING : Due to the use of the xESMF package, relying on Fortran,
+        some user warnings like : "UserWarning: Input array is not F_CONTIGUOUS.
+        Will affect performance." may be raised. It is not an issue in our case
+        (see https://github.com/JiaweiZhuang/xESMF/issues/25).
 
-    # Map all X and Y entries in the GLT to the output grid
-    # out_grd <- matrix(data = NA, nrow = nrows, ncol = ncols)
-    # vals    <- raster::values(band)
+        :param input_dataset: the product to regrid
+        :param output_grid_size: (tuple) output grid size in (lon, lat) format
+        :param d_input_crs: (int) code EPSG of the related geolocalisation frame
 
-    columns = (np.round((lon - lonmin) / psize_x)).astype(int).flatten()
-    rows = (nrows - np.round((lat - latmin) / psize_y)-1).astype(int).flatten()
+        :return output_dataset: the regularised product
+        """
+        # setting lon and lat as coordinates
+        input_dataset = input_dataset.set_coords(["lon", "lat"])
 
+        # make the grid that the data will be regridded to
+        grid_lons = np.linspace(input_dataset.lon.min().item(), input_dataset.lon.max().item(), output_grid_size[0])
+        grid_lats = np.linspace(input_dataset.lat.min().item(), input_dataset.lat.max().item(), output_grid_size[1])
+        new_grid = xr.Dataset({'lat': (['lat'], grid_lats), 'lon': (['lon'], grid_lons)})
 
-    xmin = lonmin - 0.5 * psize_x
-    xmax = lonmin - 0.5 * psize_x + ncols * psize_x
-    ymin = latmax + 0.5 * psize_y - nrows * psize_y
-    ymax = latmax + 0.5 * psize_y
-    crs = "+init=epsg:4326"
+        # use periodic=False if either or both the lat and lon dimensions are not regular
+        regridder = xe.Regridder(input_dataset, new_grid, 'bilinear', periodic=False, unmapped_to_nan=True)
 
-    # transfer values from 1000*1000 cube to the regular 4326 grid ----
-    arr = np.full((nrows, ncols), np.nan)
-    raster_flat = raster.lat.values.flatten()
-    for ipix in range(len(raster_flat)):
-        arr[rows[ipix], columns[ipix]] = raster_flat[ipix]
+        # regrid the data
+        output_dataset = regridder(input_dataset)
 
+        # put the wavelength dependant data lost in the process, back in the dataset
+        output_dataset = output_dataset.assign(fwhm=input_dataset.fwhm, F0=input_dataset.F0)
 
-    xarr = xr.Dataset( data_vars=dict(lat=(["y", "x"], arr)),
-                       coords=dict(
-                           x=np.linspace(xmin,xmax,ncols),
-                           y=np.linspace(ymax,ymin,nrows)),
-                       )
+        # adding the CRS
+        output_dataset.rio.write_crs(d_input_crs, inplace=True)
+        output_dataset.rio.set_spatial_dims(x_dim="lon", y_dim="lat", inplace=True)
+        output_dataset.rio.write_coordinate_system(inplace=True)
+
+        return output_dataset
 
 
 

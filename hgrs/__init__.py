@@ -5,12 +5,14 @@ v1.0.2 improvement of solar irradiance data and convolution for reflectance conv
 v1.0.3 development of the process kernel
 v1.0.4 reorganizing modules
 v1.0.5 investigate solar irradiance reference model
+v1.0.6: add reprojection feature
 '''
-__version__ = '1.0.5'
+__version__ = '1.0.6'
 
 from .auxdata import auxdata, solar_irradiance
 from .hgrs_kernel import algo, water_vapor, aerosol, product
 from .hgrs_process import Process
+
 
 import logging
 
