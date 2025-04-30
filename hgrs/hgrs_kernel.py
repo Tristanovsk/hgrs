@@ -70,7 +70,7 @@ class product():
         # xarray object to be processed
         self.raster = l1c_obj
         self.Rtoa = self.raster['Rtoa']
-        self.RSR = self.raster.fwhm.to_dataframe()
+        self.RSR = self.raster.fwhm.reset_coords(drop=True).to_dataframe()
         self.wl = self.Rtoa.wl
         self.sza_mean = np.nanmean(self.raster.sza)
         self.vza_mean = np.nanmean(self.raster.vza)
@@ -260,13 +260,13 @@ class algo(product):
         return palt
 
     def get_coarse_raster(self, variables=['sza', 'vza', 'raa', 'air_mass', 'Rtoa']):
-        self.coarse_raster = self.raster[variables].coarsen(x=self.xcoarsen, y=self.ycoarsen).mean()
+        self.coarse_raster = self.raster[variables].coarsen(x=self.xcoarsen, y=self.ycoarsen,boundary="trim").mean()
 
     def get_coarse_masked_raster(self, variables=['sza', 'vza', 'raa', 'air_mass', 'Rtoa_masked']):
-        self.coarse_masked_raster = self.raster[variables].coarsen(x=self.xcoarsen, y=self.ycoarsen).mean()
+        self.coarse_masked_raster = self.raster[variables].coarsen(x=self.xcoarsen, y=self.ycoarsen,boundary="trim").mean()
         self.coarse_masked_raster['water_pixel_number'] = self.raster['Rtoa_masked']. \
             isel(wl=slice(10, 20)).mean(dim='wl'). \
-            coarsen(x=self.xcoarsen, y=self.ycoarsen).count()
+            coarsen(x=self.xcoarsen, y=self.ycoarsen,boundary="trim").count()
 
     def get_gaseous_optical_thickness(self):
         gas_lut = self.gas_lut
@@ -284,9 +284,9 @@ class algo(product):
         self.get_gaseous_optical_thickness()
         wl_ref = self.gas_lut.wl  # .values
         Tg = np.exp(- self.air_mass_mean * self.abs_gas_opt_thick)
-        prisma_rsr = self.raster.fwhm.to_dataframe()
+        fwhms = self.raster.fwhm.reset_coords(drop=True).to_dataframe()
         Tg_int = []
-        for mu, fwhm in prisma_rsr.iterrows():
+        for mu, fwhm in fwhms.iterrows():
             sig = self.Gamma2sigma(fwhm.values)
             rsr = self.gaussian(wl_ref, mu, sig)
             Tg_ = (Tg * rsr).integrate('wl') / np.trapz(rsr, wl_ref)
@@ -414,7 +414,8 @@ class water_vapor(solver):
         self.wl = data.wl
 
         # TODO improve to process the air mass raster instead of scalar mean value
-        self.Twv_ = prod.Twv_lut.Twv.sel(wl=self.wl).interp(air_mass=self.air_mass)
+        # TODO check impact of method = 'nearest'
+        self.Twv_ = prod.Twv_lut.Twv.sel(wl=self.wl,method='nearest').interp(air_mass=self.air_mass)
         self.Twv_['wl'] = self.Twv_['wl'] / 1000
         self.wl_mic = self.Twv_.wl.values
 

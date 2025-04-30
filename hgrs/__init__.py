@@ -12,7 +12,7 @@ __version__ = '1.0.6'
 from .auxdata import auxdata, solar_irradiance
 from .hgrs_kernel import algo, water_vapor, aerosol, product
 from .hgrs_process import Process
-
+from .driver import Driver
 
 import logging
 
