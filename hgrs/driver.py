@@ -10,48 +10,53 @@ import xml.etree.ElementTree as ET
 
 from scipy.interpolate import RegularGridInterpolator
 
-import datetime
+import datetime as dt
 import logging
 
-
-from . import solar_irradiance
+from . import solar_irradiance, Reproj
 
 
 class Driver():
     def __init__(self,
                  satellite='enmap'):
-        
-        
+
         self.satellite = satellite
-        
+
         if 'prisma' in satellite:
             self.driver = self.read_prisma
         elif 'enmap' in satellite:
-            self.driver =self.read_l1c_enmap
+            self.driver = self.read_l1c_enmap
         else:
             logging.info('satellite mission not recognized, stop')
             return
-            
 
     def read_prisma(self,
                     l1c_path: str,
                     l2c_path: str,
                     reflectance_unit=True,
-                    drop_vars=True
+                    drop_vars=True,
+                    geoproject=True,
+                    parallel=False
                     ):
         logging.info('construct L1C image plus angle rasters')
         try:
-            dc_l1c = self.read_l1c_data(l1c_path,
-                                        reflectance_unit=reflectance_unit,
-                                        drop_vars=drop_vars)
-            dc_l2c = self.read_l2c_data(l2c_path)
+            dc_l1c = self.read_l1c_prisma(l1c_path,
+                                          reflectance_unit=reflectance_unit,
+                                          drop_vars=drop_vars)
+            dc_l2c = self.read_l2c_prisma(l2c_path)
         except:
             logging.info('input file format not recognized, stop')
             return
-        
+
         for param in ['sza', 'vza', 'raa']:
             dc_l1c[param] = dc_l2c[param]
         del dc_l2c
+
+        #dc_l1c = dc_l1c.chunk({'x': 200, 'y': 200, 'wl': 10})
+
+        if geoproject:
+            dc_l1c = Reproj().regridding(dc_l1c,parallel=parallel)
+
         return dc_l1c
 
     def read_l1c_prisma(self,
@@ -94,8 +99,9 @@ class Driver():
         # by the day of the year
         solar_irr = solar_irradiance()
         F0 = solar_irr.tsis  # huillier # gueymard # kurucz
-        DOY = datetime.datetime.strptime(ds.attrs["Product_StartTime"].decode('UTF-8'),
-                                         "%Y-%m-%dT%H:%M:%S.%f").timetuple().tm_yday
+        date_str = ds.attrs["Product_StartTime"].decode('UTF-8')
+        DOY = dt.datetime.strptime(date_str,
+                                   "%Y-%m-%dT%H:%M:%S.%f").timetuple().tm_yday
         U = 1 - 0.01672 * np.cos(0.9856 * (DOY - 4))
         F0 = F0 * U
         F0_sensor = solar_irr.convolve(F0, fwhm, info={'description': 'Convolved solar irradiance from TSIS data',
@@ -124,21 +130,25 @@ class Driver():
                           coords=dict(
                               x=np.arange(xdim)[::-1],
                               y=np.arange(ydim)[::-1],
-
+                              time=dt.datetime.strptime(date_str,
+                                                 "%Y-%m-%dT%H:%M:%S.%f"),
                               wl=wl),
-                          attrs=dict(description="PRISMA L1C cube data"))
+        attrs = dict(description="PRISMA L1C cube data"))
+
+        # chunk data for dask
+        #data = data.chunk({'x': 200, 'y': 200, 'wl': -1})
 
         # TODO check errors due to bulk SZA value instead of per pixel values
         if reflectance_unit:
             data['Rtoa'] = np.pi * data.Ltoa / (data.F0 * np.cos(np.radians(sza)))
-            if drop_vars:
-                data = data.drop_vars('Ltoa')
+        if drop_vars:
+            data = data.drop_vars('Ltoa')
 
         # =============================================================================
         # Load other metadata
         # =============================================================================
         data.attrs["L1C_product_name"] = os.path.basename(l1c_path)
-        data.attrs["acquisition_date"] = ds.attrs["Product_StartTime"].decode('UTF-8')
+        data.attrs["acquisition_date"] = date_str
         data.attrs["sza"] = ds.attrs["Sun_zenith_angle"]
         data.attrs["saa"] = ds.attrs["Sun_azimuth_angle"]
         data.F0.attrs['unit'] = 'mW/m2/nm'
@@ -150,7 +160,9 @@ class Driver():
         data = data.assign(cloud_mask=(["y", "x"], ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/Cloud_Mask"][:].T))
         data = data.assign(sunglint_mask=(["y", "x"], ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/SunGlint_Mask"][:].T))
         data = data.assign(landcover_mask=(["y", "x"], ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/LandCover_Mask"][:].T))
-        return data
+
+        return data.sel(wl=slice(350,2550))
+
 
     def read_l2c_prisma(self,
                         l2c_path: str):
@@ -181,7 +193,7 @@ class Driver():
         # # Thuillier solar irradiance convolved to the PRISMA ISRF and scaled
         # # by the day of the year
         # I0 = load_thuillier_solar_spectrum(wl, fwhm)
-        # DOY = datetime.datetime.strptime(ds.attrs["Product_StartTime"].decode('UTF-8'),
+        # DOY = dt.datetime.strptime(ds.attrs["Product_StartTime"].decode('UTF-8'),
         #                                  "%Y-%m-%dT%H:%M:%S.%f").timetuple().tm_yday
         # U = 1 - 0.01672 * np.cos(0.9856 * (DOY - 4))
         # I0 = I0 * U
@@ -248,27 +260,27 @@ class Driver():
 
         return data
 
+
     def read_l1c_enmap(self,
                        l1c_path: str,
                        reflectance_unit=False,
                        drop_vars=False,
-                      ):
-
+                       ):
         l1c_raster_path = glob.glob(os.path.join(l1c_path, "*SPECTRAL_IMAGE*.BIL"))[0]
         metadata_path = glob.glob(os.path.join(l1c_path, "*METADATA*.XML"))[0]
 
         tree = ET.parse(metadata_path)
         root = tree.getroot()
         specific = root.find('specific')
-        data = rxr.open_rasterio(l1c_raster_path, chunks={'x': -1, 'y': -1, 'band': 1}, mask_and_scale=True)
+        data = rxr.open_rasterio(l1c_raster_path, chunks={'x': 512, 'y': 512, 'band': -1}, mask_and_scale=True)
         date_str = specific.findtext('datatakeStart').strip().replace("Z", "")
 
         data = data.assign_coords({'wavelength': data.wavelength})
         data = data.set_index(band="wavelength")
         data = data.rename({'band': 'wl'})
         data.name = 'Ltoa'
-        data = data.to_dataset()
-        # data['time'] = datetime.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%f")
+        data = data.to_dataset().transpose("wl", "y", "x")
+        # data['time'] = dt.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%f")
         # data = data.set_coords('time')
 
         # convert from W.m-2.sr-1.nm-1 to mW.m-2.sr-1.nm-1
@@ -317,13 +329,13 @@ class Driver():
         vaa_interp = RegularGridInterpolator((y_coarse, x_coarse), vaa_values, method='linear')
         vaa = vaa_interp(points).reshape(YY.shape)
 
-        raa = (saa - vaa)%360
+        raa = (saa - vaa) % 360
 
         solar_irr = solar_irradiance()
         F0 = solar_irr.tsis  # thuillier # gueymard # kurucz
 
         ## Compute irradiance for the Day Of the Year (date of acquisition)
-        DOY = datetime.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%f").timetuple().tm_yday
+        DOY = dt.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%f").timetuple().tm_yday
 
         U = 1 - 0.01672 * np.cos(0.9856 * (DOY - 4))
         F0 = F0 * U
@@ -331,34 +343,35 @@ class Driver():
                                                             'unit': 'mW/m2/nm'})
 
         data = xr.Dataset(data_vars=dict(Ltoa=data.Ltoa,
-                                               F0=(['wl'], F0_sensor.values),
-                                               fwhm=(['wl'], data.fwhm.values),
-                                               sza=(["y", "x"], sza),
-                                               saa=(["y", "x"], saa),
-                                               vza=(["y", "x"], vza),
-                                               vaa=(["y", "x"], vaa),
-                                               raa=(['y', 'x'], raa),
-                                               ),
-                                coords=dict(
-                                    x=data.x.values,
-                                    y=data.y.values,
-                                    wl=data.wl.values,
-                                    time=datetime.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%f")),
+                                         F0=(['wl'], F0_sensor.values),
+                                         fwhm=(['wl'], data.fwhm.values),
+                                         sza=(["y", "x"], sza),
+                                         saa=(["y", "x"], saa),
+                                         vza=(["y", "x"], vza),
+                                         vaa=(["y", "x"], vaa),
+                                         raa=(['y', 'x'], raa),
+                                         ),
+                          coords=dict(
+                              x=data.x.values,
+                              y=data.y.values,
+                              wl=data.wl.values,
+                              time=dt.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%f")),
 
-                                attrs=dict(description="EnMAP L1C cube data"))
+                          attrs=dict(description="EnMAP L1C cube data"))
+
         ## Compute Top of Atmosphere Reflectance
         if reflectance_unit:
-            cos_sza = xr.ufuncs.cos(np.radians(data.sza))
+            mu0 = np.cos(np.radians(data.sza))
             data['Rtoa'] = np.pi * data.Ltoa / (
-                        data.F0.expand_dims({"y": data.y, "x": data.x}) * cos_sza.expand_dims(
-                    {"wl": data.wl}))
+                    data.F0.expand_dims({"y": data.y, "x": data.x}) * mu0.expand_dims(
+                {"wl": data.wl}))
             if drop_vars:
                 data = data.drop_vars('Ltoa')
 
         # Attributes
 
         data.attrs["L1C_product_name"] = os.path.basename(l1c_path)
-        data.attrs["acquisition_date"] = datetime.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%f")
+        data.attrs["acquisition_date"] = dt.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%f")
         data.sza.attrs['definition'] = " Sun Zenith Angle"
         data.saa.attrs['definition'] = " Sun Azimuth Angle"
         data.vza.attrs['definition'] = " Viewing Zenith Angle"
