@@ -1,0 +1,104 @@
+@startuml classes
+set namespaceSeparator none
+class ".ndarray" as .ndarray {
+}
+class ".ndarray" as .ndarray {
+}
+class ".ndarray" as .ndarray {
+}
+class ".ndarray" as .ndarray {
+}
+class ".ndarray" as .ndarray {
+}
+class ".ndarray" as .ndarray {
+}
+class ".ndarray" as .ndarray {
+}
+class ".ndarray" as .ndarray {
+}
+class "hgrs.auxdata.auxdata" as hgrs.auxdata.auxdata {
+}
+class "hgrs.auxdata.solar_irradiance" as hgrs.auxdata.solar_irradiance {
+}
+class "hgrs.driver.Driver" as hgrs.driver.Driver {
+}
+class "hgrs.hgrs_kernel.Spectral" as hgrs.hgrs_kernel.Spectral {
+}
+class "hgrs.hgrs_kernel.aerosol" as hgrs.hgrs_kernel.aerosol {
+}
+class "hgrs.hgrs_kernel.algo" as hgrs.hgrs_kernel.algo {
+}
+class "hgrs.hgrs_kernel.product" as hgrs.hgrs_kernel.product {
+}
+class "hgrs.hgrs_kernel.solver" as hgrs.hgrs_kernel.solver {
+}
+class "hgrs.hgrs_kernel.water_vapor" as hgrs.hgrs_kernel.water_vapor {
+}
+class "hgrs.hgrs_process.Process" as hgrs.hgrs_process.Process {
+}
+class "hgrs.utils.Reproj" as hgrs.utils.Reproj {
+}
+class "xarray.computation.arithmetic.DataArrayArithmetic" as xarray.computation.arithmetic.DataArrayArithmetic {
+}
+class "xarray.computation.arithmetic.DatasetArithmetic" as xarray.computation.arithmetic.DatasetArithmetic {
+}
+class "xarray.computation.arithmetic.SupportsArithmetic" as xarray.computation.arithmetic.SupportsArithmetic {
+}
+class "xarray.computation.ops.IncludeNumpySameMethods" as xarray.computation.ops.IncludeNumpySameMethods {
+}
+class "xarray.core._aggregations.DataArrayAggregations" as xarray.core._aggregations.DataArrayAggregations {
+}
+class "xarray.core._aggregations.DatasetAggregations" as xarray.core._aggregations.DatasetAggregations {
+}
+class "xarray.core._typed_ops.DataArrayOpsMixin" as xarray.core._typed_ops.DataArrayOpsMixin {
+}
+class "xarray.core._typed_ops.DatasetOpsMixin" as xarray.core._typed_ops.DatasetOpsMixin {
+}
+class "xarray.core.common.AbstractArray" as xarray.core.common.AbstractArray {
+}
+class "xarray.core.common.AttrAccessMixin" as xarray.core.common.AttrAccessMixin {
+}
+class "xarray.core.common.DataWithCoords" as xarray.core.common.DataWithCoords {
+}
+class "xarray.core.common.ImplementsArrayReduce" as xarray.core.common.ImplementsArrayReduce {
+}
+class "xarray.core.common.ImplementsDatasetReduce" as xarray.core.common.ImplementsDatasetReduce {
+}
+class "xarray.core.dataarray.DataArray" as xarray.core.dataarray.DataArray {
+}
+class "xarray.core.dataset.Dataset" as xarray.core.dataset.Dataset {
+}
+hgrs.hgrs_kernel.aerosol --|> hgrs.hgrs_kernel.solver
+hgrs.hgrs_kernel.algo --|> hgrs.hgrs_kernel.product
+hgrs.hgrs_kernel.water_vapor --|> hgrs.hgrs_kernel.solver
+xarray.computation.arithmetic.DataArrayArithmetic --|> xarray.computation.arithmetic.SupportsArithmetic
+xarray.computation.arithmetic.DataArrayArithmetic --|> xarray.computation.ops.IncludeNumpySameMethods
+xarray.computation.arithmetic.DataArrayArithmetic --|> xarray.core._typed_ops.DataArrayOpsMixin
+xarray.computation.arithmetic.DataArrayArithmetic --|> xarray.core.common.ImplementsArrayReduce
+xarray.computation.arithmetic.DatasetArithmetic --|> xarray.computation.arithmetic.SupportsArithmetic
+xarray.computation.arithmetic.DatasetArithmetic --|> xarray.core._typed_ops.DatasetOpsMixin
+xarray.computation.arithmetic.DatasetArithmetic --|> xarray.core.common.ImplementsDatasetReduce
+xarray.core.common.DataWithCoords --|> xarray.core.common.AttrAccessMixin
+xarray.core.dataarray.DataArray --|> xarray.computation.arithmetic.DataArrayArithmetic
+xarray.core.dataarray.DataArray --|> xarray.core._aggregations.DataArrayAggregations
+xarray.core.dataarray.DataArray --|> xarray.core.common.AbstractArray
+xarray.core.dataarray.DataArray --|> xarray.core.common.DataWithCoords
+xarray.core.dataset.Dataset --|> xarray.computation.arithmetic.DatasetArithmetic
+xarray.core.dataset.Dataset --|> xarray.core._aggregations.DatasetAggregations
+xarray.core.dataset.Dataset --|> xarray.core.common.DataWithCoords
+.ndarray --* hgrs.hgrs_kernel.product : sza_mean
+.ndarray --* hgrs.hgrs_kernel.product : sza_mean
+.ndarray --* hgrs.hgrs_kernel.product : vza_mean
+.ndarray --* hgrs.hgrs_kernel.product : vza_mean
+.ndarray --* hgrs.hgrs_kernel.product : raa_mean
+.ndarray --* hgrs.hgrs_kernel.product : raa_mean
+.ndarray --* hgrs.hgrs_kernel.product : air_mass_mean
+.ndarray --* hgrs.hgrs_kernel.product : air_mass_mean
+hgrs.auxdata.auxdata --* hgrs.hgrs_kernel.product : auxdata
+hgrs.auxdata.solar_irradiance --* hgrs.auxdata.auxdata : solar_irr
+hgrs.hgrs_kernel.Spectral --* hgrs.hgrs_kernel.product : spectral
+xarray.core.dataarray.DataArray --* hgrs.hgrs_kernel.algo : Tg_other
+xarray.core.dataset.Dataset --* hgrs.hgrs_kernel.aerosol : aero_img
+xarray.core.dataset.Dataset --* hgrs.hgrs_kernel.water_vapor : water_vapor
+xarray.core.dataarray.DataArray --o hgrs.hgrs_kernel.Spectral : fwhm
+@enduml

@@ -1,0 +1,32 @@
+@startuml packages
+set namespaceSeparator none
+package "hgrs" as hgrs {
+}
+package "hgrs.auxdata" as hgrs.auxdata {
+}
+package "hgrs.driver" as hgrs.driver {
+}
+package "hgrs.driverEnMAP" as hgrs.driverEnMAP {
+}
+package "hgrs.hgrs_kernel" as hgrs.hgrs_kernel {
+}
+package "hgrs.hgrs_process" as hgrs.hgrs_process {
+}
+package "hgrs.lut_maker" as hgrs.lut_maker {
+}
+package "hgrs.run" as hgrs.run {
+}
+package "hgrs.utils" as hgrs.utils {
+}
+hgrs --> hgrs.auxdata
+hgrs --> hgrs.driver
+hgrs --> hgrs.hgrs_kernel
+hgrs --> hgrs.hgrs_process
+hgrs --> hgrs.utils
+hgrs.driverEnMAP --> hgrs
+hgrs.hgrs_process --> hgrs
+hgrs.hgrs_process --> hgrs.driver
+hgrs.lut_maker --> hgrs
+hgrs.lut_maker --> hgrs.driver
+hgrs.run --> hgrs.hgrs_process
+@enduml
