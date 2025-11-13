@@ -86,7 +86,7 @@ for site in sites:
         # -----------------------------------------
         # Create hGRS object
         # -----------------------------------------
-        prod = hgrs.algo(dc_l1c, xcoarsen=10, ycoarsen=10)
+        prod = hgrs.Algo(dc_l1c, xcoarsen=10, ycoarsen=10)
         prod.round_angles()
 
         # -----------------------------------------
@@ -144,7 +144,7 @@ for site in sites:
         # ------------------------------------------
         # water vapor retrieval and correction
         # ------------------------------------------
-        wv_retrieval = hgrs.water_vapor(prod)
+        wv_retrieval = hgrs.WaterVapor(prod)
         wv_retrieval.solve()
         prod.get_wv_transmittance_raster(wv_retrieval.water_vapor)
         prod.water_vapor_correction()
@@ -162,7 +162,7 @@ for site in sites:
         aod550_std = cams.aod550.std().values
         aod550_std = np.max([aod550_std,0.2*aod550_mean])
 
-        aero_retrieval = hgrs.aerosol(prod,
+        aero_retrieval = hgrs.Aerosol(prod,
                                       aerosol_model=opac_model,
                                       first_guess= [aod550_mean,0.],
                                       aot550_limits= [aod550_mean-aod550_std,

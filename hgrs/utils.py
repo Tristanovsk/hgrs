@@ -67,3 +67,39 @@ class Reproj():
 
 
 
+class Misc:
+    '''
+    Miscelaneous utilities
+    '''
+
+    @staticmethod
+    def get_pressure(alt, psl):
+        '''Compute the pressure for a given altitude
+           alt : altitude in meters (float or np.array)
+           psl : pressure at sea level in hPa
+           palt : pressure at the given altitude in hPa'''
+
+        palt = psl * (1. - 0.0065 * np.nan_to_num(alt) / 288.15) ** 5.255
+        return palt
+
+    @staticmethod
+    def transmittance_dir(aot, air_mass, rot=0):
+        return np.exp(-(rot + aot) * air_mass)
+
+    @staticmethod
+    def air_mass(sza, vza):
+        return 1 / np.cos(np.radians(vza)) + 1 / np.cos(np.radians(sza))
+
+    @staticmethod
+    def earth_sun_correction(dayofyear):
+        '''
+        Earth-Sun distance correction factor for adjustment of mean solar irradiance
+
+        :param dayofyear:
+        :return: correction factor
+        '''
+        theta = 2. * np.pi * dayofyear / 365
+        d2 = 1.00011 + 0.034221 * np.cos(theta) + 0.00128 * np.sin(theta) + \
+             0.000719 * np.cos(2 * theta) + 0.000077 * np.sin(2 * theta)
+        return d2
+

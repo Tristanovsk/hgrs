@@ -2,7 +2,7 @@
 from setuptools import setup, find_packages
 
 __package__ = 'hgrs'
-__version__ = '1.0.6'
+__version__ = '1.0.7'
 
 setup(
     name=__package__,

@@ -2,6 +2,7 @@ import os
 import glob
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 import rioxarray as rxr
 
@@ -13,7 +14,7 @@ from scipy.interpolate import RegularGridInterpolator
 import datetime as dt
 import logging
 
-from . import solar_irradiance, Reproj
+from . import SolarIrradiance, Reproj, Misc, Spectral
 
 
 class Driver():
@@ -52,10 +53,10 @@ class Driver():
             dc_l1c[param] = dc_l2c[param]
         del dc_l2c
 
-        #dc_l1c = dc_l1c.chunk({'x': 200, 'y': 200, 'wl': 10})
+        # dc_l1c = dc_l1c.chunk({'x': 200, 'y': 200, 'wl': 10})
 
         if geoproject:
-            dc_l1c = Reproj().regridding(dc_l1c,parallel=parallel)
+            dc_l1c = Reproj().regridding(dc_l1c, parallel=parallel)
 
         return dc_l1c
 
@@ -97,13 +98,15 @@ class Driver():
 
         # solar irradiance convolution to the PRISMA spectral response function and scaled
         # by the day of the year
-        solar_irr = solar_irradiance()
+        solar_irr = SolarIrradiance()
         F0 = solar_irr.tsis  # huillier # gueymard # kurucz
         date_str = ds.attrs["Product_StartTime"].decode('UTF-8')
+
         DOY = dt.datetime.strptime(date_str,
                                    "%Y-%m-%dT%H:%M:%S.%f").timetuple().tm_yday
-        U = 1 - 0.01672 * np.cos(0.9856 * (DOY - 4))
-        F0 = F0 * U
+        # get correction for Sun-Earth distance and correct solar irradiance
+        D2 = Misc.earth_sun_correction(DOY)
+        F0 = F0 * D2
         F0_sensor = solar_irr.convolve(F0, fwhm, info={'description': 'Convolved solar irradiance from TSIS data',
                                                        'unit': 'mW/m2/nm'})
         # DN to TOA radiance
@@ -131,12 +134,12 @@ class Driver():
                               x=np.arange(xdim)[::-1],
                               y=np.arange(ydim)[::-1],
                               time=dt.datetime.strptime(date_str,
-                                                 "%Y-%m-%dT%H:%M:%S.%f"),
+                                                        "%Y-%m-%dT%H:%M:%S.%f"),
                               wl=wl),
-        attrs = dict(description="PRISMA L1C cube data"))
+                          attrs=dict(description="PRISMA L1C cube data"))
 
         # chunk data for dask
-        #data = data.chunk({'x': 200, 'y': 200, 'wl': -1})
+        # data = data.chunk({'x': 200, 'y': 200, 'wl': -1})
 
         # TODO check errors due to bulk SZA value instead of per pixel values
         if reflectance_unit:
@@ -161,8 +164,7 @@ class Driver():
         data = data.assign(sunglint_mask=(["y", "x"], ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/SunGlint_Mask"][:].T))
         data = data.assign(landcover_mask=(["y", "x"], ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/LandCover_Mask"][:].T))
 
-        return data.sel(wl=slice(350,2550))
-
+        return data.sel(wl=slice(350, 2550))
 
     def read_l2c_prisma(self,
                         l2c_path: str):
@@ -260,26 +262,65 @@ class Driver():
 
         return data
 
-
     def read_l1c_enmap(self,
                        l1c_path: str,
                        reflectance_unit=False,
                        drop_vars=False,
+                       filter_bad_bands=True,
+                       expon=1.8
                        ):
-        l1c_raster_path = glob.glob(os.path.join(l1c_path, "*SPECTRAL_IMAGE*.BIL"))[0]
+
+        for ext in ['BIL','TIF']:
+            l1c_raster_path = glob.glob(os.path.join(l1c_path, "*SPECTRAL_IMAGE."+ext))
+            if len(l1c_raster_path)>0:
+                l1c_raster_path =l1c_raster_path[0]
+                break
+
         metadata_path = glob.glob(os.path.join(l1c_path, "*METADATA*.XML"))[0]
 
+        # get XML metadata
         tree = ET.parse(metadata_path)
         root = tree.getroot()
         specific = root.find('specific')
-        data = rxr.open_rasterio(l1c_raster_path, chunks={'x': 512, 'y': 512, 'band': -1}, mask_and_scale=True)
+        fwhm, offset, gain = {}, {}, {}
+        for child in root.find('specific').find('bandCharacterisation'):
+            wl = child.findtext('wavelengthCenterOfBand')
+            fwhm[wl] = child.findtext('FWHMOfBand')
+            offset[wl] = child.findtext('OffsetOfBand')
+            gain[wl] = child.findtext('GainOfBand')
+
+        fwhm = pd.DataFrame(fwhm.items(), columns=['wl', 'fwhm']).astype(float).set_index('wl').to_xarray()
+        offset = pd.DataFrame(offset.items(), columns=['wl', 'offset']).astype(float).set_index('wl').to_xarray()
+        gain = pd.DataFrame(gain.items(), columns=['wl', 'gain']).astype(float).set_index('wl').to_xarray()
+        metadata = xr.merge([fwhm, offset, gain])
+
+        # get respective indexes of vnir and swir sensors
+        self.vnir_idx = np.array(root.find('specific').find('vnirProductQuality'
+                                            ).findtext('expectedChannelsList').split(',')).astype(int) - 1
+        self.swir_idx= np.array(root.find('specific').find('swirProductQuality'
+                                            ).findtext('expectedChannelsList').split(',')).astype(int) - 1
+
+        ### set wavelength to keep (EnMAP shows strange values over the overlap between vnir and swir sensors
+        self.vnir_idx_tokeep = self.vnir_idx[:-13]
+        self.swir_idx_tokeep = self.swir_idx[3:]
+
         date_str = specific.findtext('datatakeStart').strip().replace("Z", "")
 
-        data = data.assign_coords({'wavelength': data.wavelength})
-        data = data.set_index(band="wavelength")
-        data = data.rename({'band': 'wl'})
-        data.name = 'Ltoa'
-        data = data.to_dataset().transpose("wl", "y", "x")
+        # open raster
+        data = rxr.open_rasterio(l1c_raster_path, chunks={'x': 512, 'y': 512, 'band': 20},
+                                 mask_and_scale=True).to_dataset(name='Ltoa')
+
+        if '.BIL' in l1c_raster_path:
+            data = data.swap_dims({'band': 'wavelength'}).rename({'wavelength': 'wl'})
+        else:
+            # get FWHM data and scale radiance
+            data = data.rename({'band': 'wl'})
+            data['wl'] = metadata.wl
+            data['fwhm'] = metadata.fwhm
+            data['Ltoa'] = metadata.gain * data['Ltoa'] + metadata.offset
+
+
+        data = data.transpose("wl", "y", "x")
         # data['time'] = dt.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%f")
         # data = data.set_coords('time')
 
@@ -331,14 +372,19 @@ class Driver():
 
         raa = (saa - vaa) % 360
 
-        solar_irr = solar_irradiance()
+        solar_irr = SolarIrradiance()
         F0 = solar_irr.tsis  # thuillier # gueymard # kurucz
 
         ## Compute irradiance for the Day Of the Year (date of acquisition)
         DOY = dt.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%f").timetuple().tm_yday
+        # get correction for Sun-Earth distance and correct solar irradiance
+        D2 = Misc.earth_sun_correction(DOY)
+        F0 = F0 * D2
+        self.F0 = F0
 
-        U = 1 - 0.01672 * np.cos(0.9856 * (DOY - 4))
-        F0 = F0 * U
+        # convolution with spectral responses
+        spectral = Spectral(data.wl, data.fwhm.values)
+        F0 = spectral.convolve2(F0, expon=expon)
         F0_sensor = solar_irr.convolve(F0, data.fwhm, info={'description': 'Convolved solar irradiance from TSIS data',
                                                             'unit': 'mW/m2/nm'})
 
@@ -361,28 +407,47 @@ class Driver():
 
         ## Compute Top of Atmosphere Reflectance
         if reflectance_unit:
-            mu0 = np.cos(np.radians(data.sza))
-            data['Rtoa'] = np.pi * data.Ltoa / (
-                    data.F0.expand_dims({"y": data.y, "x": data.x}) * mu0.expand_dims(
-                {"wl": data.wl}))
+            ## WARNING we take the mean SZA value to save time/memory               ##
+            ## this could  induce 0.1% uncertainty onn the Ltoa to Rtoa  conversion ##
+            mu0 = np.cos(np.radians(data.sza.mean()))
+            data['Rtoa'] = np.pi * data.Ltoa / (data.F0 * mu0)
             if drop_vars:
                 data = data.drop_vars('Ltoa')
+
+        # discard angles outside the image frame
+        params = ['sza', 'vza', 'raa', 'saa', 'vaa']
+        for i in range(len(params)):
+            data[params[i]] = data[params[i]].where(data.Rtoa.isel(wl=0) > 0)
+
+        wl_vnir = data.wl.isel(wl=self.vnir_idx).values
+        wl_swir = data.wl.isel(wl=self.swir_idx).values
+        if filter_bad_bands:
+            wl_vnir = data.wl.isel(wl=self.vnir_idx_tokeep).values
+            wl_swir = data.wl.isel(wl=self.swir_idx_tokeep).values
+            data =data.isel(wl=[*self.vnir_idx_tokeep,*self.swir_idx_tokeep])
 
         # Attributes
 
         data.attrs["L1C_product_name"] = os.path.basename(l1c_path)
         data.attrs["acquisition_date"] = dt.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%f")
+        data.attrs["vnir_index"] = self.vnir_idx
+        data.attrs["swir_index"] = self.swir_idx
+        data.attrs["vnir_index_tokeep"] = self.vnir_idx_tokeep
+        data.attrs["swir_index_tokeep"] = self.swir_idx_tokeep
+        data.attrs["vnir_bands"] = wl_vnir
+        data.attrs["swir_bands"] = wl_swir
+
         data.sza.attrs['definition'] = " Sun Zenith Angle"
         data.saa.attrs['definition'] = " Sun Azimuth Angle"
         data.vza.attrs['definition'] = " Viewing Zenith Angle"
         data.vaa.attrs['definition'] = " Viewing Azimuth Angle"
         data.raa.attrs['definition'] = " Relative Azimuth Angle"
 
-        data.sza.attrs['unit'] = " ° "
-        data.saa.attrs['unit'] = " ° "
-        data.vza.attrs['unit'] = " ° "
-        data.vaa.attrs['unit'] = " ° "
-        data.raa.attrs['unit'] = " ° "
+        data.sza.attrs['unit'] = "degree"
+        data.saa.attrs['unit'] = "degree"
+        data.vza.attrs['unit'] = "degree"
+        data.vaa.attrs['unit'] = "degree"
+        data.raa.attrs['unit'] = "degree"
 
         data.F0.attrs['unit'] = 'mW/m2/nm'
         data.Rtoa.attrs['definition'] = 'Reflectance at the Top of the Atmosphere'

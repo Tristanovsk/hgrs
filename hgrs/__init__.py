@@ -6,12 +6,13 @@ v1.0.3 development of the process kernel
 v1.0.4 reorganizing modules
 v1.0.5 investigate solar irradiance reference model
 v1.0.6: add reprojection feature
+v1.0.7: 2025-11-07 correct bug for Earth-Sun distance, option to remove bad EnMAP bands, refactoring
 '''
-__version__ = '1.0.6'
+__version__ = '1.0.7'
 
-from .utils import Reproj
-from .auxdata import auxdata, solar_irradiance
-from .hgrs_kernel import algo, water_vapor, aerosol, product, Spectral
+from .utils import Reproj, Misc
+from .auxdata import AuxData, SolarIrradiance
+from .hgrs_kernel import Algo, WaterVapor, Aerosol, Product, Spectral
 from .hgrs_process import Process
 from .driver import Driver
 

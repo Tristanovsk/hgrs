@@ -5,7 +5,7 @@ import xarray as xr
 import rioxarray as rxr
 
 import xml.etree.ElementTree as ET
-from hgrs import solar_irradiance
+from hgrs import SolarIrradiance
 import datetime
 import pandas as pd
 from scipy.interpolate import RegularGridInterpolator
@@ -81,7 +81,7 @@ def read_L1c_data (L1C_filepath: str,
 
     raa = np.abs(saa-vaa)
 
-    solar_irr = solar_irradiance()
+    solar_irr = SolarIrradiance()
     F0 = solar_irr.tsis  # thuillier # gueymard # kurucz
 
     ## Compute irradiance for the Day Of the Year (date of acquisition)

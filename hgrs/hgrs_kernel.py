@@ -16,12 +16,12 @@ import itertools
 from scipy.optimize import least_squares
 from numba import njit, prange
 
-from . import auxdata
+from . import AuxData
 
 opj = os.path.join
 
 
-class product():
+class Product():
     def __init__(self,
                  l1c_obj=None,
                  xcoarsen=20,
@@ -68,12 +68,12 @@ class product():
         self.tno2c = 3e-6
         self.tch4c = 1e-2
         self.psl = 1013
-        self.coef_abs_scat = 0.9
+        self.coef_abs_scat = 1.
 
         self.altitude = 0
 
         # xarray object to be processed
-        self.raster = l1c_obj
+        self.raster = l1c_obj.copy()
         self.Rtoa = self.raster['Rtoa']
         self.fwhm = self.raster.fwhm.reset_coords(drop=True)#.to_dataframe()
         self.wl = self.Rtoa.wl
@@ -90,7 +90,7 @@ class product():
         # exponent of the super-gaussian spectral response function
         self.expon = expon
         # set the convolution module
-        self.spectral = Spectral(self.wl, self.fwhm,expon=expon)
+        self.spectral = Spectral(self.wl, self.fwhm.values)
 
     def load_auxiliary_data(self):
 
@@ -103,7 +103,7 @@ class product():
         self.Twv_lut = xr.open_dataset(self.water_vapor_transmittance_file).interp(wl=self.wl)
 
         # get hgrs auxdata
-        self.auxdata = auxdata(self.wl)
+        self.auxdata = AuxData(self.wl)
 
     def get_ndwi(self):
         green = self.Rtoa.sel(wl=self.wl_green).mean(dim='wl')
@@ -291,10 +291,10 @@ class product():
             print('please apply algo.get_coarse_masked_raster() before')
 
 
-class algo(product):
+class Algo(Product):
 
     def __init__(self, l1c_obj=None, xcoarsen=20, ycoarsen=20, expon=2):
-        product.__init__(self, l1c_obj, xcoarsen, ycoarsen, expon)
+        Product.__init__(self, l1c_obj, xcoarsen, ycoarsen, expon)
 
     def get_pressure(self, alt, psl):
         '''Compute the pressure for a given altitude
@@ -306,13 +306,13 @@ class algo(product):
         return palt
 
     def get_coarse_raster(self, variables=['sza', 'vza', 'raa', 'air_mass', 'Rtoa']):
-        self.coarse_raster = self.raster[variables].coarsen(x=self.xcoarsen, y=self.ycoarsen,boundary="trim").mean()
+        self.coarse_raster = self.raster[variables].coarsen(x=self.xcoarsen, y=self.ycoarsen,boundary="pad").mean()
 
     def get_coarse_masked_raster(self, variables=['sza', 'vza', 'raa', 'air_mass', 'Rtoa']):
-        self.coarse_masked_raster = self.raster[variables].coarsen(x=self.xcoarsen, y=self.ycoarsen,boundary="trim").mean()
+        self.coarse_masked_raster = self.raster[variables].coarsen(x=self.xcoarsen, y=self.ycoarsen,boundary="pad").mean()
         self.coarse_masked_raster['water_pixel_number'] = self.raster['Rtoa']. \
             isel(wl=slice(10, 20)).mean(dim='wl'). \
-            coarsen(x=self.xcoarsen, y=self.ycoarsen,boundary="trim").count()
+            coarsen(x=self.xcoarsen, y=self.ycoarsen,boundary="pad").count()
 
     def get_gaseous_optical_thickness(self):
         gas_lut = self.gas_lut
@@ -330,13 +330,13 @@ class algo(product):
         self.get_gaseous_optical_thickness()
         wl_ref = self.gas_lut.wl  # .values
         Tg = np.exp(- self.air_mass_mean * self.abs_gas_opt_thick)
-        self.Tg_other = self.spectral.convolve2(Tg,name='Ttot')
+        self.Tg_other = self.spectral.convolve2(Tg,name='Ttot',expon=self.expon)
         # fwhms = self.raster.fwhm.reset_coords(drop=True).to_dataframe()
         # Tg_int = []
         # for mu, fwhm in fwhms.iterrows():
         #     sig = self.Gamma2sigma(fwhm.values)
         #     rsr = self.gaussian(wl_ref, mu, sig)
-        #     Tg_ = (Tg * rsr).integrate('wl') / np.trapz(rsr, wl_ref)
+        #     Tg_ = (Tg * rsr).integrate('wl') / np.trapezoid(rsr, wl_ref)
         #     Tg_int.append(Tg_.values)
         #
         # self.Tg_other = xr.DataArray(Tg_int, name='Ttot', coords={'wl': self.raster.wl.values})
@@ -375,6 +375,8 @@ class algo(product):
         if self.Twv_raster is None:
             print('xarray of water vapor transmittance is not set, please run get_wv_transmittance_raster(tcwv_raster)')
             return
+
+
         raster[variable] = raster[variable] / self.Twv_raster
         raster[variable].attrs['water_vapor_correction'] = True
 
@@ -390,7 +392,7 @@ class algo(product):
         return xarr.interp(x=self.raster.x, y=self.raster.y)
 
 
-class solver():
+class Solver():
     def __init__(self):
         pass
 
@@ -452,7 +454,7 @@ class solver():
         return result
 
 
-class water_vapor(solver):
+class WaterVapor(Solver):
 
     def __init__(self, prod,
                  raster_name='coarse_masked_raster',
@@ -557,7 +559,7 @@ class water_vapor(solver):
                                       )
 
 
-class aerosol(solver):
+class Aerosol(Solver):
 
     def __init__(self, prod,
                  aerosol_model='COAV_rh70',
@@ -634,7 +636,7 @@ class aerosol(solver):
         Rdiff = Rtoa_lut.interp(aot_ref=aot_ref)
         Tdir = self.transmittance_dir(aot, self.air_mass, rot=rot)
         sunglint_corr = Tdir * sunglint_eps
-        Rdir = sunglint_corr * BRDFg / Tdir.sel(wl=self.wl_sunglint).mean(dim='wl')
+        Rdir = sunglint_corr * BRDFg / (Tdir.sel(wl=self.wl_sunglint)*sunglint_eps.sel(wl=self.wl_sunglint)).mean(dim='wl')
         # sunglint_toa.Rtoa.plot(x='wl',hue='aot_ref',ax=axs[0])
 
         return Rdiff + Rdir
@@ -676,7 +678,10 @@ class aerosol(solver):
 
                     res_lsq = least_squares(self.func, x0,
                                             args=(self.aot_lut, self.rot, self.Rtoa_lut, self.sunglint_eps, y),
-                                            bounds=([self.aod550_min, 0], [self.aod550_max, 1.3]), diff_step=1e-3, xtol=1e-3, ftol=1e-4,
+                                            bounds=([self.aod550_min, 0], [self.aod550_max, 1.3]),
+                                            diff_step=1e-3,
+                                            xtol=1e-3,
+                                            ftol=1e-4,
                                             max_nfev=20)
                     # except:
                     # print(wl_,aot_,rot_,Rtoa_lut_,sunglint_eps_, y)
@@ -734,7 +739,7 @@ class aerosol(solver):
         self.get_aot_full_resolution()
 
         # construct aot raster
-        aot_ref_vals = self.aot_ref_full.round(3)
+        aot_ref_vals = self.aero_img['aot_ref_smoothed'].round(3)
         aot_refs = np.unique(aot_ref_vals)
         aot_refs = aot_refs[~np.isnan(aot_refs)]
         # TODO update LUT for aot< 0.001
@@ -765,12 +770,13 @@ class aerosol(solver):
         self.atmo_img.attrs['aerosol_model'] = self.aerosol_model
 
 
-
+@njit(fastmath=True)
 def Gamma2sigma(Gamma):
     '''Function to convert FWHM (Gamma) to standard deviation (sigma)'''
     return Gamma * np.sqrt(2.) / (np.sqrt(2. * np.log(2.)) * 2.)
 
 
+@njit(fastmath=True)
 def gaussian(x, mu, sigma):
     return 1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(-(x - mu) ** 2 / (2 * sigma ** 2))
 
@@ -812,8 +818,7 @@ def super_gaussian_fwhm2sigma(fwhm,
 class Spectral():
     def __init__(self,
                  central_wl,
-                 fwhm,
-                 expon=2):
+                 fwhm):
         '''
         Convolve with spectral response of sensor based on full width at half maximum of each band
         :param central_wl: numpy array of the central wavelengths
@@ -821,16 +826,13 @@ class Spectral():
         :return:
         '''
         self.central_wl = central_wl
-        if not isinstance(fwhm, xr.DataArray):
+        if not isinstance(fwhm, np.ndarray):
             fwhm = np.array([fwhm] * len(central_wl))
-
-            fwhm = xr.DataArray(fwhm, name='fwhm',
-                                coords={'wl': central_wl},
-                                attrs={
-                                    'definition': 'full width at half maximum of spectral responses modeled as gaussian distributions'})
+        fwhm = xr.DataArray(fwhm, name='fwhm',
+                            coords={'wl': central_wl},
+                            attrs={
+                                'definition': 'full width at half maximum of spectral responses modeled as gaussian distributions'})
         self.fwhm = fwhm
-        self.expon = expon
-
 
     def plot_rsr(self):
 
@@ -838,8 +840,8 @@ class Spectral():
         fig, axs = plt.subplots(nrows=1, ncols=1, figsize=(10, 4))
 
         for mu, fwhm in self.fwhm.groupby('wl'):
-            sig = Gamma2sigma(fwhm.values)
-            rsr = gaussian(wl_ref, mu, sig)
+            sig = self.Gamma2sigma(fwhm.values)
+            rsr = self.gaussian(wl_ref, mu, sig)
             axs.plot(wl_ref, rsr, '-k', lw=0.5, alpha=0.4)
         axs.set_xlabel('Wavelength (nm)')
         axs.set_ylabel('Spectral response function')
@@ -867,7 +869,7 @@ class Spectral():
         for ii in prange(len(fwhm)):
             sig = Gamma2sigma(fwhm[ii])
             rsr = gaussian(wl_signal, wl[ii], sig)
-            signal_[ii] = np.trapz((signal * rsr), wl_signal) / np.trapz(rsr, wl_signal)
+            signal_[ii] = np.trapezoid((signal * rsr), wl_signal) / np.trapezoid(rsr, wl_signal)
         return signal_
 
     @staticmethod
@@ -877,7 +879,8 @@ class Spectral():
             signal,
             wl,
             fwhm,
-            expon=2.
+            expon=2.,
+            threshold=1e-6
     ):
         '''
         Convolution assuming Dirac for signal source spectral response
@@ -885,38 +888,51 @@ class Spectral():
         :param signal: numpy of signal to convolve, coord=wl_signal
         :param wl: numpy of wavelength coordinates of signal
         :param fwhm: numpy with data=fwhm containing full width at half maximum in nm
+        :param threshold: minimum values of the response function to be included in the convolution
         :return: numpy of convoluted signal
         '''
+
         Nwl = len(wl)
-        signal_ = np.full((Nwl), np.nan, dtype=np.float32)
+        response = np.full((Nwl), np.nan, dtype=np.float32)
         for ii in prange(len(fwhm)):
             sig = super_gaussian_fwhm2sigma(fwhm[ii], expon)
             rsr = super_gaussian(wl_signal, mu=wl[ii], sigma=sig, expon=expon)
-            signal_[ii] = np.trapz((signal * rsr), wl_signal) / np.trapz(rsr, wl_signal)
-        return signal_
+
+            # remove values above a given threshold to speed up computation
+            idx = rsr > threshold
+            wl_signal_ =wl_signal[idx]
+            signal_ = signal[idx]
+            rsr = rsr[idx]
+
+            response[ii] = np.trapezoid((signal_ * rsr), wl_signal_) / np.trapezoid(rsr, wl_signal_)
+        return response
 
     def convolve2(self,
                   signal,
                   name='signal',
+                  expon=3,
+                  threshold=1e-4,
                   info={}):
         '''
         Convolve with spectral response of sensor based on full width at half maximum of each band
         :param signal: xarray spectral signal to convolve, coord=wl
         :param fwhm: xarray with data=fwhm containing full width at half maximum in nm, and coords=wl
         :param info: optional parameter to feed the attributes of the output xarray
+        :param threshold: minimum values of the response function to be included in the convolution
         :return:
         '''
-        expon = self.expon
+
         wl_ref = signal.wl.values
         fwhm = self.fwhm.values
         wl = self.fwhm.wl.values
         xdims = signal.dims
-
+        attrs=signal.attrs
+        name=signal.name
         if len(xdims) == 1:
-            signal_int = self.convolve2_(wl_ref, signal.values, wl, fwhm, expon)
+            signal_int = self.convolve2_(wl_ref, signal.values, wl, fwhm, expon, threshold=threshold)
             signal_int = xr.DataArray(signal_int, name=name,
                                       coords={'wl': self.fwhm.wl.values},
-                                      attrs=info)
+                                      attrs=attrs)
 
         else:
             # to handle multidimensional xarray
@@ -935,8 +951,8 @@ class Spectral():
                                            dim: value})
                     xsignal_int_.append(_)
                 xsignal_int.append(xr.concat(xsignal_int_, dim=dim))
-            signal_int = xr.merge(xsignal_int).to_dataarray()
-            signal_int.attrs = info
+            signal_int = xr.merge(xsignal_int)#.to_dataarray()
+            signal_int.attrs = attrs
 
         return signal_int
 

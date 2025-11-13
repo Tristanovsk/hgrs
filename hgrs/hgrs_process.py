@@ -2,6 +2,7 @@
 
 import os, copy
 import glob
+from tqdm.auto import tqdm
 
 import numpy as np
 import scipy.optimize as so
@@ -51,6 +52,10 @@ class Process():
         # construct L1C image plus angle rasters
         # ---------------------------------------
         logging.info('construct L1C image plus angle rasters')
+        action = 'load L1C image plus angle rasters'
+        pbar = tqdm(total=len(action),
+                    desc=action +  f": {l1c_path} ")
+
         try:
             dc_l1c = driver.read_L1C_data(l1c_path, reflectance_unit=True, drop_vars=True)
             dc_l2c = driver.read_L2C_data(l2c_path)
@@ -68,12 +73,13 @@ class Process():
         date = dc_l1c.attrs['acquisition_date']
         clon = np.nanmean(dc_l1c.lon)
         clat = np.nanmean(dc_l1c.lat)
+        pbar.refresh()
 
         # -----------------------------------------
         # Create hGRS object
         # -----------------------------------------
         logging.info('Create hGRS object')
-        prod = hgrs.algo(dc_l1c, xcoarsen=10, ycoarsen=10)
+        prod = hgrs.Algo(dc_l1c, xcoarsen=10, ycoarsen=10)
         prod.round_angles()
 
         # -----------------------------------------
@@ -147,7 +153,7 @@ class Process():
         # water vapor retrieval and correction
         # ------------------------------------------
         logging.info('water vapor retrieval and correction')
-        wv_retrieval = hgrs.water_vapor(prod)
+        wv_retrieval = hgrs.WaterVapor(prod)
         wv_retrieval.solve()
         prod.get_wv_transmittance_raster(wv_retrieval.water_vapor)
         prod.water_vapor_correction()
@@ -166,12 +172,12 @@ class Process():
 
         aod550_std = cams.aod550.std().values
         aod550_std = np.max([aod550_std, 0.2 * aod550_mean+0.05])
-        aot550_min = np.max([aod550_mean - 2*aod550_std,0.001])
-        aero_retrieval = hgrs.aerosol(prod,
+        aot550_min = 0. #np.max([aod550_mean - 2*aod550_std,0.001])
+        aero_retrieval = hgrs.Aerosol(prod,
                                       aerosol_model=opac_model,
                                       first_guess=[aod550_mean, 0.],
                                       aot550_limits=[aot550_min,
-                                                     aod550_mean + aod550_std])
+                                                     aod550_mean + 2*aod550_std])
         aero_retrieval.solve()
         aero_retrieval.get_atmo_parameters(prod.coarse_masked_raster.wl)
 
