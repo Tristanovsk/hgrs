@@ -1,0 +1,14 @@
+path:
+  data_root: '/DATA/git/satellite_app/hgrs/data/lut'
+  toa_lut: 'toa_lut_opac_wind_up_v3.nc'
+  trans_lut: 'transmittance_lut_opac_wind_v3.nc'
+  cams: '/data/cams'
+
+settings:
+  aerosol_combination: [0, 0.5, 0, 0.5, 0.,0.]
+  aerosol_models: ['ARCT_rh70', 'COAV_rh70', 'DESE_rh70', 'MACL_rh70', 'URBA_rh70', 'WASO_rh0']
+
+processor:
+  ncpu: 8
+  chunk: 512
+  netcdf_engine: 'h5netcdf'
