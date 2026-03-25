@@ -1,7 +1,11 @@
 # python
 
 import os, copy
+
+import importlib_resources
+import yaml
 import glob
+
 from tqdm.auto import tqdm
 
 import numpy as np
@@ -17,9 +21,13 @@ import hgrs
 
 opj = os.path.join
 
-HGRSDATA = '/DATA/git/satellite_app/hgrs/data/lut'
-TOALUT = 'opac_osoaa_lut_v3_light.nc'
-TRANSLUT = 'transmittance_downward_irradiance.nc'
+configfile = importlib_resources.files(__package__).joinpath('..').joinpath('config.yml')
+with open(configfile, 'r') as file:
+    config = yaml.safe_load(file)
+
+HGRSDATA = config['path']['data_root']
+TOALUT = config['path']['toa_lut']
+TRANSLUT = config['path']['trans_lut']
 
 
 class Process():
@@ -34,52 +42,50 @@ class Process():
         self.successful = False
 
     def execute(self,
-                l1c_path,
-                l2c_path,
+                img_path,
                 cams_path
                 ):
-
-        # ---------------------------------------
-        # Load pre-computed radiative transfer LUT
-        # ---------------------------------------
-        logging.info('Load pre-computed radiative transfer LUT')
-        aero_lut = xr.open_dataset(self.lut_file)
-        aero_lut['wl'] = aero_lut['wl'] * 1000
-
-        Ttot_Ed = xr.open_dataset(self.trans_lut_file)
 
         # ---------------------------------------
         # construct L1C image plus angle rasters
         # ---------------------------------------
         logging.info('construct L1C image plus angle rasters')
-        action = 'load L1C image plus angle rasters'
-        pbar = tqdm(total=len(action),
-                    desc=action +  f": {l1c_path} ")
+        # action = 'load L1C image plus angle rasters'
+        # pbar = tqdm(total=len(action),
+        #             desc=action + f": {img_path} ")
+        if isinstance(img_path, str):
+            try:
+                driver = hgrs.Driver('enmap')
+                l1_prod = driver.driver(img_path, reflectance_unit=True)
+            except:
+                logging.info('input file format not recognized, stop')
+                return
+        else:
+            try:
+                driver  = hgrs.Driver('prisma')
+                l1_prod = driver.read_L1C_data(img_path[0], reflectance_unit=True, drop_vars=True)
+                l2c_prod = driver.read_L2C_data(img_path[1])
+            except:
+                logging.info('input file format not recognized, stop')
+                return
 
-        try:
-            dc_l1c = driver.read_L1C_data(l1c_path, reflectance_unit=True, drop_vars=True)
-            dc_l2c = driver.read_L2C_data(l2c_path)
-        except:
-            logging.info('input file format not recognized, stop')
-            return
-
-        for param in ['sza', 'vza', 'raa']:
-            dc_l1c[param] = dc_l2c[param]
-        del dc_l2c
+            for param in ['sza', 'vza', 'raa']:
+                l1_prod[param] = l2c_prod[param]
+            del l2c_prod
 
         # get L1C object
-        self.l1_prod = dc_l1c
+        self.l1_prod = l1_prod
 
-        date = dc_l1c.attrs['acquisition_date']
-        clon = np.nanmean(dc_l1c.lon)
-        clat = np.nanmean(dc_l1c.lat)
-        pbar.refresh()
+        date = l1_prod.time
+        raster = l1_prod.sza.rio.reproject(4326)
+        clon, clat = float(raster.x.mean()), float(raster.y.mean())
+        #pbar.refresh()
 
         # -----------------------------------------
         # Create hGRS object
         # -----------------------------------------
         logging.info('Create hGRS object')
-        prod = hgrs.Algo(dc_l1c, xcoarsen=10, ycoarsen=10)
+        prod = hgrs.Algo(l1_prod, xcoarsen=20, ycoarsen=20)
         prod.round_angles()
 
         # -----------------------------------------
@@ -116,12 +122,11 @@ class Process():
         wl_cams = cams_aod.wl.str.replace('aod', '').astype(float)
         cams_aod = cams_aod.assign_coords(wl=wl_cams)
 
-        rh = '_rh70'
-        models = ['COAV' + rh, 'COPO' + rh, 'DESE' + rh, 'MACL' + rh, 'MAPO' + rh,
-                  ]  # 'ANTA' + rh, 'ARCT' + rh,'URBA' + rh
-        lut_aod = aero_lut.aot.sel(model=models, aot_ref=1).interp(wl=cams_aod.wl)
+        # new LUT:
+        lut_aod = prod.aero_lut.aot.sel(aot_ref=1).interp(wl=cams_aod.wl)
         idx = np.abs((cams_aod / cams.aod550) - lut_aod).sum('wl').argmin()
-        opac_model = aero_lut.sel(model=models).model.values[idx]
+        opac_model = prod.aero_lut.model.values[idx]
+        logging.info('OPAC model: '+opac_model)
 
         # set gases and pressure
         prod.pressure = float(cams.sp) * 1e-2
@@ -130,8 +135,18 @@ class Process():
         prod.tch4c = float(cams.tc_ch4)
 
         # -----------------------------------------
-        # Apply water masking
+        # Apply cloud, water masking
         # -----------------------------------------
+
+        # TODO put omnimask settins (bands) in config.yml
+        logging.info('Apply omnicloudmask')
+        red_index = 670
+        green_index = 550
+        nir_index = 940
+        rgnir = prod.raster.Rtoa.sel(wl=[red_index, green_index, nir_index], method='nearest').fillna(0)  # .values
+        omnimask = prod.get_omnicloudmask(rgnir)
+        prod.raster['Rtoa'] = prod.raster['Rtoa'].where(omnimask==0)
+
         logging.info('Apply water masking')
         prod.apply_water_masks()
 
@@ -157,29 +172,72 @@ class Process():
         wv_retrieval.solve()
         prod.get_wv_transmittance_raster(wv_retrieval.water_vapor)
         prod.water_vapor_correction()
+        logging.info('mask bands where gaseous abs. is too strong')
+        Tg_tot = prod.Tg_other * prod.Twv_raster.mean(['x', 'y'])
 
         # ------------------------------------------
         # aerosol retrieval
         # ------------------------------------------
         logging.info('aerosol retrieval')
 
-        variable = 'Rtoa_masked'
+        variable = 'Rtoa'
+        #prod.coarse_masked_raster = prod.remove_wl_dataset(
+        #    prod.coarse_masked_raster, prod.wl_to_remove, variable=variable)
         prod.coarse_masked_raster = prod.remove_wl_dataset(
             prod.coarse_masked_raster, prod.wl_to_remove, variable=variable)
+
+        # remove bands where Tg is below a threshold (typically Tg < 0.5)
+        prod.coarse_masked_raster[variable] = prod.coarse_masked_raster[variable].where(Tg_tot > 0.5, drop=True)
+        prod.raster[variable] = prod.raster[variable].where(Tg_tot > 0.5, drop=True)
 
         # TODO double check regularization from CAMS AOT values
         aod550_mean = cams.aod550.mean().values
 
         aod550_std = cams.aod550.std().values
-        aod550_std = np.max([aod550_std, 0.2 * aod550_mean+0.05])
-        aot550_min = 0. #np.max([aod550_mean - 2*aod550_std,0.001])
+        aod550_std = np.max([aod550_std, 0.2*aod550_mean + 0.05])
+        aot550_min = 0.002  # np.max([aod550_mean - 2*aod550_std,0.001])
         aero_retrieval = hgrs.Aerosol(prod,
                                       aerosol_model=opac_model,
                                       first_guess=[aod550_mean, 0.],
                                       aot550_limits=[aot550_min,
-                                                     aod550_mean + 2*aod550_std])
+                                                     aod550_mean + 2 * aod550_std])
         aero_retrieval.solve()
+        aero_retrieval.prepare_lut(prod.coarse_masked_raster.wl)
+        aero_retrieval.smoothing()
+
+        # self.aero_img['aot_ref_smoothed']=self.aero_img['aot_ref_smoothed']*0.5
+        # construct aot raster
+        # with full res
+        # aot_ref_vals = self.aot_ref_full.round(3)
+        # with coarse res
+        aot_ref_vals = aero_retrieval.aero_img['aot_ref_smoothed'].round(3)
+        aot_refs = np.unique(aot_ref_vals)
+        aot_refs = aot_refs[~np.isnan(aot_refs)]
+        # TODO update LUT for aot< 0.001
+        aot_refs[aot_refs < 0.002] = 0.002
+        # if rounded aot_ref has unique value
+        if len(aot_refs) == 1:
+            aot_refs = np.concatenate([aot_refs, 1.2 * aot_refs])
+        aots = aero_retrieval.aot_lut.interp(aot_ref=aot_refs, method='linear')
+        aots = aots.interp(aot_ref=aot_ref_vals, method='nearest')
+
+        aots.name = 'aot'
+        aots.attrs['description'] = 'spectral aerosol optical thickness'
+
+        # construct raster for diffuse atmospheric reflectance
+        #TODO check quadratic interpolation (should be much better)
+        Rdiffs = aero_retrieval.Rtoa_lut.interp(aot_ref=aot_refs, method='linear')
+        Rdiffs = Rdiffs.interp(aot_ref=aot_ref_vals, method='nearest')
+        Rdiffs.name = 'Rtoa_diff'
+        Rdiffs.attrs['description'] = 'top-of-atmosphere atmosphere reflectance'
+
+        # construct raster for direct transmittance due to rayleigh and aerosol
+        Tdirs = aero_retrieval.transmittance_dir(aots, aero_retrieval.air_mass, rot=aero_retrieval.rot)
+        Tdirs.name = 'Tdir'
+        Tdirs.attrs['description'] = 'direct transmittance due to rayleigh and aerosol for total air mass'
+
         aero_retrieval.get_atmo_parameters(prod.coarse_masked_raster.wl)
+        self.aero_retrieval = aero_retrieval
 
         # ------------------------------------------
         # full resolution processing
@@ -187,32 +245,77 @@ class Process():
         logging.info('process full resolution')
 
         prod.raster = prod.remove_wl_dataset(prod.raster, prod.wl_to_remove)
-        prod.other_gas_correction(raster_name='raster', variable='Rtoa_masked')
-        wv_full = prod.get_full_resolution(wv_retrieval.water_vapor)
-        prod.get_wv_transmittance_raster(wv_full)
-        prod.water_vapor_correction(raster_name='raster', variable='Rtoa_masked')
+        prod.other_gas_correction(raster_name='raster', variable='Rtoa')
+
+        # ------------------------------------------
+        # water vapor
+        # ------------------------------------------
+        chunk = 256
+        height, width, Nwl = len(prod.raster.y), len(prod.raster.x), len(prod.raster.wl)
+        results = np.full((height, width), 0, dtype=np.float32)
+        variable = 'Rtoa'
+        for iy in range(0, height, chunk):
+            yc = min(height, iy + chunk)
+            if yc > height:
+                continue
+            for ix in range(0, width, chunk):
+                xc = min(width, ix + chunk)
+                if xc > width:
+                    continue
+                raster = prod.raster[variable][:, iy:yc, ix:xc]
+                Twv_raster = prod.Twv_raster.interp(x=raster.x, y=raster.y)
+                prod.raster[variable].data[:, iy:yc, ix:xc] = raster / Twv_raster
 
         Rdiff_full = aero_retrieval.atmo_img.Rtoa_diff  # .interp(x=prod.raster.x, y=prod.raster.y)
         Tdir_full = aero_retrieval.atmo_img.Tdir  # .interp(x=prod.raster.x, y=prod.raster.y)
-        Rcorr = (prod.raster.Rtoa_masked - Rdiff_full)
         wl_sunglint = prod.wl_sunglint
-        sunglint_eps = aero_retrieval.sunglint_eps
-        BRDF_sunglint = (Rcorr.sel(wl=wl_sunglint) / (Tdir_full.sel(wl=wl_sunglint)
-                                                      * sunglint_eps.sel(wl=wl_sunglint))).mean(dim='wl')
-        BRDF_sunglint.name = 'brdfg_full'
-        BRDF_sunglint = BRDF_sunglint.reset_coords().brdfg_full
-        # TODO clean up xarray inheritance of some extra coordinates...
-        # BRDF_sunglint = BRDF_sunglint.drop_vars('aot_ref', errors=False).squeeze()
-        Rdir = Tdir_full * sunglint_eps * BRDF_sunglint
 
-        Rrs_l2 = (Rcorr - Rdir) / np.pi
+        Rrs = np.full((Nwl, height, width), np.nan, dtype=np.float32)
+        BRDF_sunglint = np.full((height, width), np.nan, dtype=np.float32)
+
+        for iy in range(0, height, chunk):
+            yc = min(height, iy + chunk)
+            if yc > height:
+                continue
+            for ix in range(0, width, chunk):
+                xc = min(width, ix + chunk)
+                if xc > width:
+                    continue
+
+                Rcorr = prod.raster.Rtoa[:, iy:yc, ix:xc]
+                Rdiff_full_ = Rdiff_full.interp(x=Rcorr.x, y=Rcorr.y)
+
+                Rcorr = Rcorr - Rdiff_full_
+
+                Tdir_full_ = Tdir_full.interp(x=Rcorr.x, y=Rcorr.y)
+
+                sunglint_eps = aero_retrieval.sunglint_eps
+                BRDF_sunglint[iy:yc, ix:xc] = (Rcorr.sel(wl=wl_sunglint) / (Tdir_full_.sel(wl=wl_sunglint)
+                                                                            * sunglint_eps.sel(wl=wl_sunglint))).mean(
+                    dim='wl')
+
+                # TODO clean up xarray inheritance of some extra coordinates...
+                # BRDF_sunglint = BRDF_sunglint.drop_vars('aot_ref', errors=False).squeeze()
+                Rdir = Tdir_full_ * sunglint_eps * BRDF_sunglint[iy:yc, ix:xc]
+
+                Rrs[:, iy:yc, ix:xc] = (Rcorr - Rdir) / np.pi
+
+        l2_prod = xr.Dataset(dict(Rrs=(["wl", "y", "x"], Rrs),
+                                  brdfg_full=(["y", "x"], BRDF_sunglint), ),
+                             coords=dict(x=prod.raster.x,
+                                         y=prod.raster.y,
+                                         wl=prod.raster.wl),
+                             )
 
         # finally correct for down and upward transmittances
         # TODO compute pixel wise
+        Ttot_Ed = xr.open_dataset('/data/vrtc/xlut/transmittance_lut_opac_wind_v3.nc').isel(wind=1)
+        Ttot_Ed['wl'] = Ttot_Ed['wl'] * 1e3
+
         aot_ref = float(aero_retrieval.aero_img.aot_ref.mean())
-        wl = Rrs_l2.wl.values
-        sza = float(Rrs_l2.sza)
-        vza = float(Rrs_l2.vza)
+        wl = l2_prod.Rrs.wl.values
+        sza = float(aero_retrieval.sza)
+        vza = float(aero_retrieval.vza)
         Ttot_Ed_ = Ttot_Ed.Ttot_Ed.sel(model=opac_model).interp(sza=sza, method='cubic'
                                                                 ).interp(aot_ref=aot_ref, method='quadratic').interp(
             wl=wl, method='cubic')
@@ -220,8 +323,7 @@ class Process():
                                                                 ).interp(aot_ref=aot_ref, method='quadratic').interp(
             wl=wl, method='cubic') ** 1.05
         Ttot = (Ttot_Ed_ * Ttot_Lu_).reset_coords(drop=True)
-        Rrs_l2 = Rrs_l2 / Ttot
-        Rrs_l2.name = 'Rrs'
+        l2_prod['Rrs'] = l2_prod.Rrs / Ttot
 
         # -----------------------------
         # construct output image
@@ -235,16 +337,10 @@ class Process():
         water_pixel_prop = (prod.coarse_masked_raster.water_pixel_number / prod.Npix_per_megapix).drop_vars(
             'tcwv').rename({"x": "xc", "y": "yc"})
         water_pixel_prop.name = 'water_pix_prop'
-        geom = prod.raster[['lon', 'lat']].drop_vars('tcwv')
-        Rrs_ = Rrs_l2.reset_coords().drop_vars(['model', 'z']).rename({'tcwv': 'tcwv_full', 'aot_ref': 'aot_ref_full'})
-        l2_prod = xr.merge([Rrs_, wv, aero, geom, water_pixel_prop])
-        l2_prod['brdfg_full'] = BRDF_sunglint
-
-        l2_prod.lat.attrs['unit'] = 'degrees_north'
-        l2_prod.lat.attrs['long_name'] = 'latitude'
-
-        l2_prod.lon.attrs['unit'] = 'degrees_east'
-        l2_prod.lon.attrs['long_name'] = 'longitude'
+        # geom = prod.raster[['lon', 'lat']].drop_vars('tcwv')
+        # Rrs_ = Rrs_l2.reset_coords().drop_vars(['model', 'z']).rename({'tcwv': 'tcwv_full', 'aot_ref': 'aot_ref_full'}).set_coords(['time','spatial_ref'])
+        l2_prod = xr.merge([l2_prod, wv, aero, water_pixel_prop])
+        # l2_prod['brdfg_full'] = BRDF_sunglint
 
         param = 'Rrs'
         l2_prod[param].attrs['unit'] = 'per steradian'
@@ -279,10 +375,10 @@ class Process():
         l2_prod[param].attrs['unit'] = '-'
         l2_prod[param].attrs['long_name'] = 'aerosol_optical_thickness_standard_deviation'
         l2_prod[param].attrs['description'] = 'Uncertainty based on optimal estimation procedure'
-        param = 'aot_ref_full'
-        l2_prod[param].attrs['unit'] = '-'
-        l2_prod[param].attrs['long_name'] = 'aerosol_optical_thickness'
-        l2_prod[param].attrs['description'] = 'Aerosol optical thickness at the reference wavelength (550nm)'
+        # param = 'aot_ref_full'
+        # l2_prod[param].attrs['unit'] = '-'
+        # l2_prod[param].attrs['long_name'] = 'aerosol_optical_thickness'
+        # l2_prod[param].attrs['description'] = 'Aerosol optical thickness at the reference wavelength (550nm)'
 
         param = 'tcwv'
         l2_prod[param].attrs['unit'] = 'kg m-2'
@@ -292,10 +388,10 @@ class Process():
         l2_prod[param].attrs['unit'] = 'kg m-2'
         l2_prod[param].attrs['long_name'] = 'total_columnar_water_vapor_standard_deviation'
         l2_prod[param].attrs['description'] = 'Uncertainty based on optimal estimation procedure'
-        param = 'tcwv_full'
-        l2_prod[param].attrs['unit'] = 'kg m-2'
-        l2_prod[param].attrs['long_name'] = 'total_columnar_water_vapor'
-        l2_prod[param].attrs['description'] = 'Water vapor integrated over the atmospheric layer'
+        # param = 'tcwv_full'
+        # l2_prod[param].attrs['unit'] = 'kg m-2'
+        # l2_prod[param].attrs['long_name'] = 'total_columnar_water_vapor'
+        # l2_prod[param].attrs['description'] = 'Water vapor integrated over the atmospheric layer'
 
         l2_prod['pressure'] = prod.pressure
         l2_prod['pressure'].attrs['unit'] = 'hPa'
@@ -318,21 +414,23 @@ class Process():
         # --metadata
         l2_prod.attrs = prod.raster.attrs
         l2_prod.attrs['processing_date'] = str(dt.datetime.now())
+        l2_prod.attrs['acquisition_date'] = str(l2_prod.attrs['acquisition_date'])
         l2_prod.attrs['hgrs_version'] = hgrs.__version__
         l2_prod.attrs['description'] = 'PRISMA L2A-hGRS cube data'
         l2_prod.attrs['DEM'] = 'not available'
         l2_prod.attrs['aerosol_model'] = aero_retrieval.aerosol_model
         keys = ['wl_water_vapor', 'wl_sunglint', 'wl_atmo', 'wl_to_remove', 'wl_green', 'wl_nir', 'wl_1600', 'wl_rgb',
                 'xcoarsen', 'ycoarsen', 'Npix_per_megapix', 'block_size', 'pixel_percentage', 'pixel_threshold',
-                'ang_resol', 'dirdata', 'abs_gas_file', 'lut_file', 'water_vapor_transmittance_file',
+                'ang_resol', 'abs_gas_file', 'lut_file', 'water_vapor_transmittance_file',
                 'sunglint_threshold',
                 'ndwi_threshold', 'green_swir_index_threshold', 'pressure', 'to3c', 'tno2c', 'tch4c', 'psl',
                 'coef_abs_scat',
                 'altitude']
         for key in keys:
+            print(key)
             l2_prod.attrs[key] = str(prod.__dict__[key])
 
-        self.l2_prod =l2_prod
+        self.l2_prod = l2_prod
         self.successful = True
 
         return
@@ -347,8 +445,8 @@ class Process():
         encoding = {
             'Rrs': {'dtype': 'int16', 'scale_factor': 0.00001, 'add_offset': .2, '_FillValue': -32768, "zlib": True,
                     "complevel": complevel},
-            'aot_ref_full': {'dtype': 'int16', 'scale_factor': 0.001, '_FillValue': -9999, "zlib": True,
-                             "complevel": complevel},
+            #'aot_ref_full': {'dtype': 'int16', 'scale_factor': 0.001, '_FillValue': -9999, "zlib": True,
+            #                 "complevel": complevel},
             'aot_ref': {'dtype': 'int16', 'scale_factor': 0.001, '_FillValue': -9999, "zlib": True,
                         "complevel": complevel},
             'aot_ref_std': {'dtype': 'int16', 'scale_factor': 0.001, '_FillValue': -9999, "zlib": True,
@@ -359,8 +457,8 @@ class Process():
                       "complevel": complevel},
             'brdfg_std': {'dtype': 'int16', 'scale_factor': 0.00001, 'add_offset': .2, '_FillValue': -32768,
                           "zlib": True, "complevel": complevel},
-            'tcwv_full': {'dtype': 'int16', 'scale_factor': 0.01, '_FillValue': -9999, "zlib": True,
-                          "complevel": complevel},
+            #'tcwv_full': {'dtype': 'int16', 'scale_factor': 0.01, '_FillValue': -9999, "zlib": True,
+            #              "complevel": complevel},
             'tcwv': {'dtype': 'int16', 'scale_factor': 0.01, '_FillValue': -9999, "zlib": True, "complevel": complevel},
             'tcwv_std': {'dtype': 'int16', 'scale_factor': 0.01, '_FillValue': -9999, "zlib": True,
                          "complevel": complevel}}
@@ -374,5 +472,5 @@ class Process():
             os.mkdir(odir)
 
         self.l2_prod.sel(wl=slice(400, 1150)).to_netcdf(ofile, encoding=encoding)
-        #l2_prod.close()
+        # l2_prod.close()
         return

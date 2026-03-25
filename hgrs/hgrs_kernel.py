@@ -1,5 +1,7 @@
 import os
 from pkg_resources import resource_filename
+import importlib_resources
+import yaml
 
 import numpy as np
 import pandas as pd
@@ -13,13 +15,24 @@ import matplotlib.pyplot as plt
 from multiprocessing import Pool  # Process pool
 from multiprocessing import sharedctypes
 import itertools
-from scipy.optimize import least_squares
+from scipy.optimize import least_squares, minimize
 from numba import njit, prange
+import logging
+
+from omnicloudmask import predict_from_array
 
 from . import AuxData
 
 opj = os.path.join
 
+
+configfile = importlib_resources.files(__package__).joinpath('..').joinpath('config.yml')
+with open(configfile, 'r') as file:
+    config = yaml.safe_load(file)
+
+HGRSDATA = config['path']['data_root']
+TOALUT = config['path']['toa_lut']
+TRANSLUT = config['path']['trans_lut']
 
 class Product():
     def __init__(self,
@@ -31,7 +44,9 @@ class Product():
         # spectral parameters
         self.wl_water_vapor = slice(800, 1300)
         self.wl_sunglint = slice(2150, 2250)
-        self.wl_atmo = slice(950, 2450)
+        #self.wl_atmo = slice(950, 2450)
+        self.wl_atmo = [1000, 1050, 1075, 1100, 1200, 1300, 1600, 1650, 1700, 2150, 2200, 2250]
+        self.wl_non_neg = [419.457, 490, 560, 650, 750, 800, 865, 1650, 2250]
         self.wl_to_remove = [(935, 967), (1105, 1170), (1320, 1490), (1778, 2033), (2465, 2550)]
         self.wl_green = slice(540, 570)
         self.wl_nir = slice(850, 882)
@@ -51,10 +66,10 @@ class Product():
         self.ang_resol = 1
 
         # pre-computed auxiliary data
-        self.dirdata = resource_filename(__package__, '../data/')
-        self.abs_gas_file = opj(self.dirdata, 'lut', 'lut_abs_opt_thickness_normalized.nc')
-        self.lut_file = opj(self.dirdata, 'lut', 'opac_osoaa_lut_v2.nc')
-        self.water_vapor_transmittance_file = opj(self.dirdata, 'lut', 'water_vapor_transmittance.nc')
+        self.lut_file = opj(HGRSDATA, TOALUT)
+        self.trans_lut_file = opj(HGRSDATA, TRANSLUT)
+        self.abs_gas_file = opj(HGRSDATA, 'lut_abs_opt_thickness_normalized.nc')
+        self.water_vapor_transmittance_file = opj(HGRSDATA, 'water_vapor_transmittance.nc')
 
         # mask thresholding parameters
         self.sunglint_threshold = 0.11
@@ -74,9 +89,9 @@ class Product():
 
         # xarray object to be processed
         self.raster = l1c_obj.copy()
-        self.Rtoa = self.raster['Rtoa']
+
         self.fwhm = self.raster.fwhm.reset_coords(drop=True)#.to_dataframe()
-        self.wl = self.Rtoa.wl
+        self.wl = self.raster.wl
         self.sza_mean = np.nanmean(self.raster.sza)
         self.vza_mean = np.nanmean(self.raster.vza)
         self.raa_mean = np.nanmean(self.raster.raa)
@@ -85,7 +100,7 @@ class Product():
         self.Tg_other = None
 
         self.load_auxiliary_data()
-        
+
         # spectral function for sensor response convolution
         # exponent of the super-gaussian spectral response function
         self.expon = expon
@@ -94,37 +109,86 @@ class Product():
 
     def load_auxiliary_data(self):
 
+        # ---------------------------------------
+        # Load pre-computed radiative transfer LUT
+        # ---------------------------------------
+        logging.info('Load pre-computed radiative transfer LUT')
+
         # get LUT
         self.gas_lut = xr.open_dataset(self.abs_gas_file)
-        self.aero_lut = xr.open_dataset(self.lut_file)
+        self.aero_lut = xr.open_dataset(self.lut_file).isel(wind=1)
+        self.Ttot_Ed = xr.open_dataset(self.trans_lut_file).isel(wind=1)
+        self.Twv_lut = xr.open_dataset(self.water_vapor_transmittance_file).interp(wl=self.wl)
+
         # convert wavelength in nanometer
         self.aero_lut['wl'] = self.aero_lut['wl'] * 1000
         self.aero_lut['wl'].attrs['description'] = 'wavelength of simulation (nanometer)'
-        self.Twv_lut = xr.open_dataset(self.water_vapor_transmittance_file).interp(wl=self.wl)
+        self.Ttot_Ed['wl'] = self.Ttot_Ed['wl'] * 1e3
+        self.Ttot_Ed['wl'].attrs['description'] = 'wavelength of simulation (nanometer)'
 
         # get hgrs auxdata
         self.auxdata = AuxData(self.wl)
 
     def get_ndwi(self):
-        green = self.Rtoa.sel(wl=self.wl_green).mean(dim='wl')
-        nir = self.Rtoa.sel(wl=self.wl_nir).mean(dim='wl')
+        green = self.raster.Rtoa.sel(wl=self.wl_green).mean(dim='wl')
+        nir = self.raster.Rtoa.sel(wl=self.wl_nir).mean(dim='wl')
         self.ndwi = (green - nir) / (green + nir)
 
     def get_green_swir_index(self):
-        green = self.Rtoa.sel(wl=self.wl_green).mean(dim='wl')
-        b1600 = self.Rtoa.sel(wl=self.wl_1600).mean(dim='wl')
+        green = self.raster.Rtoa.sel(wl=self.wl_green).mean(dim='wl')
+        b1600 = self.raster.Rtoa.sel(wl=self.wl_1600).mean(dim='wl')
         self.green_swir_index = (green - b1600) / (green + b1600)
 
     def get_b2200(self):
-        self.b2200 = self.Rtoa.sel(wl=self.wl_sunglint).mean(dim='wl')
+        self.b2200 = self.raster.Rtoa.sel(wl=self.wl_sunglint).mean(dim='wl')
 
     def apply_water_masks(self):
         self.get_ndwi()
         self.get_green_swir_index()
         self.get_b2200()
-        self.raster['Rtoa'] = self.Rtoa.where(self.ndwi > self.ndwi_threshold). \
+        self.raster['Rtoa'] = self.raster.Rtoa.where(self.ndwi > self.ndwi_threshold). \
             where(self.b2200 < self.sunglint_threshold). \
             where(self.green_swir_index > self.green_swir_index_threshold).load()
+
+    def get_omnicloudmask(self,
+                            rgnir):
+
+        '''
+        Apply OmniCloudMAsk for clouds and cloud shadows masking
+
+        Outputs:
+            0 = Clear
+            1 = Thick Cloud
+            2 = Thin Cloud
+            3 = Cloud Shadow
+
+        see https://github.com/DPIRD-DMA/OmniCloudMask
+
+        refs:
+         Wright, N., Duncan, J. M. A., Callow, J. N., Thompson, S. E., & George, R. J. (2025).
+         Training sensor-agnostic deep learning models for remote sensing:
+         Achieving state-of-the-art cloud and cloud shadow identification with OmniCloudMask.
+         Remote Sensing of Environment, 322, 114694. https://doi.org/10.1016/J.RSE.2025.114694
+
+        :param rgnir: raster xarray object with the red, green and nir bands
+        :return omnimask: raster of the retrieved mask
+        '''
+
+
+        pred = predict_from_array(rgnir.fillna(0).values)
+        omnimask = xr.DataArray(pred[0],
+                                dims=["y", "x"],
+                                coords=dict(x=rgnir.x.values,
+                                            y=rgnir.y.values,
+                                            time=rgnir.time,
+                                            ),
+                                attrs=dict(
+                                    description="OmniCloudMask, see https://github.com/DPIRD-DMA/OmniCloudMask",
+                                    reference='https://doi.org/10.1016/J.RSE.2025.114694'),
+                                )
+        omnimask.name='omnimask'
+        return omnimask
+
 
     def round_angles(self):
         for param in ['sza', 'vza', 'raa']:
@@ -584,8 +648,10 @@ class Aerosol(Solver):
         self.yfull = prod.raster.y
 
         # get data for the subset of "black water" wavelengths
-        data = self.raster[variable].sel(wl=prod.wl_atmo)
-        self.data = data
+        self.data = self.raster[variable]
+        data = self.data
+        self.wl_atmo = prod.wl_atmo
+        self.wl_non_neg = prod.wl_non_neg
         self.nwl, self.height, self.width = data.shape
         self.x = data.x
         self.y = data.y
@@ -642,7 +708,13 @@ class Aerosol(Solver):
         return Rdiff + Rdir
 
     def func(self, x, aot, rot, Rtoa_lut, sunglint_eps, y):
-        return (self.toa_simu(aot, rot, Rtoa_lut, sunglint_eps, *x) - y)  # /sigma
+        return (y - self.toa_simu(aot, rot, Rtoa_lut, sunglint_eps, *x))  # /sigma
+
+    def cost_func(self, x, aot, rot, Rtoa_lut, sunglint_eps, y):
+        return np.sum((self.func(x, aot, rot, Rtoa_lut, sunglint_eps, y) ** 2))
+
+    def constraint(self, x, aot, rot, Rtoa_lut, sunglint_eps, y):
+        return np.min((self.func(x, aot, rot, Rtoa_lut, sunglint_eps, y)))
 
     def solve(self, x0=[0.005, 0.]):
 
@@ -666,35 +738,37 @@ class Aerosol(Solver):
         def chunk_process(args):
             window_x, window_y = args
             tmp = np.ctypeslib.as_array(shared_array)
-
+            x0 = self.x0
             for ix in range(window_x, min(width, window_x + self.block_size)):
                 for iy in range(window_y, min(height, window_y + self.block_size)):
                     if water_pixel_number is not None:
                         if water_pixel_number.isel(x=ix, y=iy).values < self.pixel_threshold:
                             continue
-                    x0 = self.x0
-                    y = data.isel(x=ix, y=iy).dropna(dim='wl')
+                    # x0 = self.x0
+                    yfull = data.isel(x=ix, y=iy).dropna(dim='wl')
                     # sigma = Rtoa_std.isel(x=ix,y=iy).dropna(dim='wl')
 
-                    res_lsq = least_squares(self.func, x0,
-                                            args=(self.aot_lut, self.rot, self.Rtoa_lut, self.sunglint_eps, y),
-                                            bounds=([self.aod550_min, 0], [self.aod550_max, 1.3]),
-                                            diff_step=1e-3,
-                                            xtol=1e-3,
-                                            ftol=1e-4,
-                                            max_nfev=20)
+                    cons = ({'type': 'ineq',
+                             'fun': self.constraint,
+                             'args': (self.aot_lut, self.rot, self.Rtoa_lut, self.sunglint_eps,
+                                      yfull.sel(wl=self.wl_non_neg, method='nearest'))
+                             })
+
+                    min_res = minimize(self.cost_func, x0,
+                                       args=(self.aot_lut, self.rot, self.Rtoa_lut, self.sunglint_eps,
+                                             yfull.sel(wl=self.wl_atmo, method='nearest')),
+                                       method='SLSQP',
+                                       bounds=((self.aod550_min, self.aod550_max), (0, 1.3)),
+                                       constraints=cons, options={'maxiter': 10}
+                                       )
+                    xres = min_res.x
+                    if min_res.success:
+                        x0 = xres
                     # except:
                     # print(wl_,aot_,rot_,Rtoa_lut_,sunglint_eps_, y)
                     #    break
-                    xres = res_lsq.x
-                    resVariance = (res_lsq.fun ** 2).sum() / (len(res_lsq.fun) - len(res_lsq.x))
-                    hess = np.matmul(res_lsq.jac.T, res_lsq.jac)
 
-                    try:
-                        hess_inv = np.linalg.inv(hess)
-                        std = self.errFit(hess_inv, resVariance)
-                    except:
-                        std = [np.nan, np.nan]
+                    std = [min_res.fun, np.sum(min_res.jac**2)]
                     tmp[ix, iy, :] = [*xres, *std]
 
         window_idxs = [(i, j) for i, j in
@@ -718,10 +792,10 @@ class Aerosol(Solver):
                                        aerosol_model=self.aerosol_model)
                                    )
 
-    def smoothing(self, windows=np.array([15, 15]), mask=np.ones((3, 3))):
+    def smoothing(self, windows=np.array([3, 3]), mask=np.ones((3, 3))):
 
-        weights = (1 / self.aero_img['aot_ref_std'] ** 2).values
-        param = self.aero_img['aot_ref'].values
+        weights = (1 / self.aero_img['aot_ref_std'] ** 2).__deepcopy__().to_numpy().astype(float)
+        param = self.aero_img['aot_ref'].__deepcopy__().to_numpy().astype(float)
         aot_ref_smoothed = self.filter2d(param, weights, windows)
         res = ndimage.generic_filter(aot_ref_smoothed, function=self.conv_mapping, footprint=mask, mode='nearest')
 
@@ -739,11 +813,13 @@ class Aerosol(Solver):
         self.get_aot_full_resolution()
 
         # construct aot raster
-        aot_ref_vals = self.aero_img['aot_ref_smoothed'].round(3)
+        aot_ref_median = self.aero_img.aot_ref_smoothed.median()
+        aot_ref_vals = self.aero_img['aot_ref_smoothed'].fillna(aot_ref_median).round(3)
         aot_refs = np.unique(aot_ref_vals)
         aot_refs = aot_refs[~np.isnan(aot_refs)]
         # TODO update LUT for aot< 0.001
         aot_refs[aot_refs<0.002]=0.002
+
         # if rounded aot_ref has unique value
         if len(aot_refs) == 1:
             aot_refs = np.concatenate([ aot_refs, 1.2 * aot_refs])

@@ -2,7 +2,7 @@
 from setuptools import setup, find_packages
 
 __package__ = 'hgrs'
-__version__ = '1.0.7'
+__version__ = '1.1.0'
 
 setup(
     name=__package__,
@@ -29,6 +29,8 @@ setup(
 
     entry_points={
         'console_scripts': [
-            'hgrs = hgrs.run:main'
+            'hgrs_prisma = hgrs.run_prisma:main',
+            'hgrs_enmap = hgrs.run_enmap:main'
+
         ]}
 )

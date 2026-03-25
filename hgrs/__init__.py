@@ -7,8 +7,9 @@ v1.0.4 reorganizing modules
 v1.0.5 investigate solar irradiance reference model
 v1.0.6: add reprojection feature
 v1.0.7: 2025-11-07 correct bug for Earth-Sun distance, option to remove bad EnMAP bands, refactoring
+v1.1.0: new processor for aerosol optical thickness based on non-negativity of retrieved reflectance
 '''
-__version__ = '1.0.7'
+__version__ = '1.1.0'
 
 from .utils import Reproj, Misc
 from .auxdata import AuxData, SolarIrradiance
