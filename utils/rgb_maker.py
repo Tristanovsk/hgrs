@@ -52,7 +52,7 @@ for site in sites:
         # for param in ['sza','vza','raa']:
         #     dc_l1c[param]=dc_l2c[param]
 
-        prod = hgrs.algo(dc_l1c)
+        prod = hgrs.Algo(dc_l1c)
         #prod.load_metadata()
         #prod.get_ndwi()
         plt.figure(figsize=(7,7))

@@ -33,10 +33,10 @@ sunglint_eps_file = resource_filename(__package__, '../data/aux/mean_rglint_smal
 rayleigh_file = resource_filename(__package__, '../data/aux/rayleigh_bodhaine.txt')
 
 
-class auxdata():
+class AuxData():
     def __init__(self, wl=None):
         # load data from raw files
-        self.solar_irr = solar_irradiance()
+        self.solar_irr = SolarIrradiance()
         self.sunglint_eps = pd.read_csv(sunglint_eps_file, sep=r'\s+', index_col=0).to_xarray()
         self.rayleigh()
         self.pressure_rot_ref = 1013.25
@@ -62,7 +62,7 @@ class auxdata():
         self.rot = data.set_index('wl').to_xarray().rot
 
 
-class solar_irradiance():
+class SolarIrradiance():
     def __init__(self, wl=None):
         # load data from raw files
         self.wl_min = 300

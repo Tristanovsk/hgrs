@@ -29,7 +29,7 @@ workdir=opj(workdir_,site)
 l1c='PRS_L1_STD_OFFL_20210906103712_20210906103717_0001.he5'
 l1c_path=opj(workdir,l1c)
 dc_l1c = driver.read_L1C_data(l1c_path,reflectance_unit=True,drop_vars=True)
-prod = hgrs.algo(dc_l1c)
+prod = hgrs.Algo(dc_l1c)
 prod.load_metadata()
 
 #---------------------------------------

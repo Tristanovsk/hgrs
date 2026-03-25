@@ -54,7 +54,7 @@ for l1c_path in glob.glob(opj(workdir, '*L1_STD_OFFL*.he5')):
     # -----------------------------------------
     # Create hGRS object
     # -----------------------------------------
-    prod = hgrs.algo(dc_l1c, xcoarsen=10, ycoarsen=10)
+    prod = hgrs.Algo(dc_l1c, xcoarsen=10, ycoarsen=10)
     prod.round_angles()
 
     # -----------------------------------------
@@ -86,7 +86,7 @@ for l1c_path in glob.glob(opj(workdir, '*L1_STD_OFFL*.he5')):
     # ------------------------------------------
     # water vapor retrieval and correction
     # ------------------------------------------
-    wv_retrieval = hgrs.water_vapor(prod)
+    wv_retrieval = hgrs.WaterVapor(prod)
     wv_retrieval.solve()
     prod.get_wv_transmittance_raster(wv_retrieval.water_vapor)
     prod.water_vapor_correction()
@@ -97,7 +97,7 @@ for l1c_path in glob.glob(opj(workdir, '*L1_STD_OFFL*.he5')):
     variable = 'Rtoa_masked'
     prod.coarse_masked_raster = prod.remove_wl_dataset(
         prod.coarse_masked_raster, prod.wl_to_remove, variable=variable)
-    aero_retrieval = hgrs.aerosol(prod)
+    aero_retrieval = hgrs.Aerosol(prod)
     aero_retrieval.solve()
     aero_retrieval.get_atmo_parameters(prod.coarse_masked_raster.wl)
 

@@ -1,0 +1,44 @@
+# _pyproject.toml
+[build-system]
+requires      = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hGRS"
+version = "1.1.0"
+description = "hGRS processor for atmospheric correction of high-spatial resolution and multispectral satellite images"
+readme = "pypi_README.rst"
+authors = [{ name = "Tristan Harmel", email = "tristan.harmel@gmail.com" }]
+license = { file = "LICENSE" }
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+]
+keywords = ["PRISMA","EnMAP","atmospheric correction", "EO satellite"]
+requires-python = ">=3.9"
+dynamic = ["dependencies"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+#"grs"= []
+"hgrs"= ['*.yml','data/lut/*.nc', 'data/aux/*']
+
+[tool.setuptools.exclude-package-data]
+"*" = [".gitattributes"]
+
+[project.scripts]
+hgrs = "hgrs.run:main"
+
+#dynamic = ["dependencies"]
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[project.optional-dependencies]
+dev = ["black", "bumpver", "isort", "pip-tools", "pytest"]
+
+[project.urls]
+Homepage = "https://github.com/Tristanovsk/hgrs"
+Documentation = "https://hgrs.readthedocs.io"
