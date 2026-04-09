@@ -1,5 +1,5 @@
 path:
-  data_root: '/DATA/git/satellite_app/hgrs/data/lut'
+  data_root: '/home/lavardma/Documents/hgrs/data/lut'
   toa_lut: 'toa_lut_opac_wind_up_v3.nc'
   trans_lut: 'transmittance_lut_opac_wind_v3.nc'
   cams: '/data/cams'
