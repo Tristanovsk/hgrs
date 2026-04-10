@@ -4,7 +4,7 @@ import xarray as xr
 
 from typing import Any
 from dataclasses import dataclass
-
+from math import gamma
 
 @dataclass
 class SensorDescription:
@@ -17,56 +17,32 @@ class SensorDescription:
     sensor_mod: Any
     sensor_mod_lr: Any
 
+def Gamma2sigma(Gamma): 
+    """Convert FWHM (Gamma) to standard deviation (sigma) for a Gaussian""" 
+    return Gamma / (2.0 * np.sqrt(2.0 * np.log(2.0))) 
 
-def super_gaussian_fwhm2sigma(fwhm, expon):
-    """
-    Function to convert FWHM to standard deviation (sigma) of the super-gaussian distribution
-    :param fwhm:
-    :param expon:
-    :return:
-    """
-    return fwhm / (2 * (2 * np.log(2)) ** (1 / expon))
+def super_gaussian_fwhm2sigma(fwhm, expon): 
+    """ Convert FWHM to sigma for a super-Gaussian (generalized normal). Valid for any exponent b = expon. """ 
+    denum = 2 * np.sqrt(gamma(1/expon)/gamma(3/expon))* (np.log(2))**(1/expon)
+    return fwhm / denum
 
-
-def super_gaussian_sr(x, amplitude=1.0, mu=0.0, sigma=1.0, expon=10.0):
-    """
-    Super-Gaussian distribution:
-    super_gaussian(x, amplitude, mu, sigma, expon) =
-        (amplitude/(sqrt(2*pi)*sigma)) * exp(-abs(x-mu)**expon / (2*sigma**expon))
-    :param x:
-    :param amplitude:
-    :param mu:
-    :param sigma:
-    :param expon:
-    :return:
-    """
-
-    sigma = max(1.0e-15, sigma)
-    return (
-        amplitude
-        / (np.sqrt(2 * np.pi) * sigma)
-        * np.exp(-np.abs(x - mu) ** expon / (2 * sigma**expon))
-    )
-
-
-def Gamma2sigma(Gamma):
-    """Function to convert FWHM (Gamma) to standard deviation (sigma)"""
-    return Gamma * np.sqrt(2.0) / (np.sqrt(2.0 * np.log(2.0)) * 2.0)
-
-
-def gaussian_sr(x, mu, sigma):
-    return 1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(-((x - mu) ** 2) / (2 * sigma**2))
-
+def gaussian_sr(x, mu, sigma): 
+    """ Gaussian (normalized to 1 at peak) """
+    return np.exp(-0.5 * ((x - mu) / sigma)**2) / (sigma*np.sqrt(2*np.pi))
+                  
+def super_gaussian_sr(x, mu, sigma, expon): 
+    alpha = np.sqrt(2)*sigma
+    beta = expon
+    norm = beta / (2*alpha * gamma(1/beta))
+    return np.exp(-np.abs((x - mu) / alpha)**expon)* norm
 
 def gaussian(wl_signal, wl_i, fwhm_i):
     sig = Gamma2sigma(fwhm_i)
     return gaussian_sr(wl_signal, mu=wl_i, sigma=sig)
 
-
 def super_gaussian(wl_signal, wl_i, fwhm_i, expon=3.0):
     sig = super_gaussian_fwhm2sigma(fwhm_i, expon)
     return super_gaussian_sr(wl_signal, mu=wl_i, sigma=sig, expon=expon)
-
 
 def resample_to_target_raster(
     signal, da_rsr, dim_to_resample="wl", dim_tgt="wl_sensor"
