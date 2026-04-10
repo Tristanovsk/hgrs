@@ -43,30 +43,30 @@ class Process:
         from pathlib import Path
         import pickle
 
-        path_pkl = Path("test.pkl")
-        if not path_pkl.exists():
+        # path_pkl = Path("test.pkl")
+        # if not path_pkl.exists():
 
-            if isinstance(img_path, str):
-                # try:
-                driver = hgrs.Driver("enmap")
-                l1_prod = driver.driver(img_path, reflectance_unit=True)
-                # except:
-                #     logging.info("input file format not recognized, stop")
-                #     return
-            else:
-                # try:
-                driver = hgrs.Driver("prisma")
-                l1_prod = driver.read_prisma(img_path[0], img_path[1])
-
-                # except Exception as e:
-                #     logging.info("input file format not recognized, stop")
-                #     print(e)
-                #     return
-            with open(path_pkl, "wb") as f:
-                pickle.dump(l1_prod, f)
+        if isinstance(img_path, str):
+            # try:
+            driver = hgrs.Driver("enmap")
+            l1_prod = driver.driver(img_path, reflectance_unit=True)
+            # except:
+            #     logging.info("input file format not recognized, stop")
+            #     return
         else:
-            with open(path_pkl, "rb") as f:
-                l1_prod = pickle.load(f)
+            # try:
+            driver = hgrs.Driver("prisma")
+            l1_prod = driver.read_prisma(img_path[0], img_path[1])
+
+            # except Exception as e:
+            #     logging.info("input file format not recognized, stop")
+            #     print(e)
+            #     return
+        #     with open(path_pkl, "wb") as f:
+        #         pickle.dump(l1_prod, f)
+        # else:
+        #     with open(path_pkl, "rb") as f:
+        #         l1_prod = pickle.load(f)
         # get L1C object
         self.l1_prod = l1_prod
         wl_sensor = np.array(l1_prod.wl_sensor)
