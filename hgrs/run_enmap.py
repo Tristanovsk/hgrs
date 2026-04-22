@@ -1,10 +1,10 @@
 ''' Executable to process PRISMA L1 images for aquatic environment
 
 Usage:
-  hgrs <l1_path>  [--cams_file file] [-o <ofile>] [--odir <odir>]\
- [--opac_model name] [--levname <lev>] [--no_clobber] [--dem_file file]
-  hgrs -h | --help
-  hgrs -v | --version
+  hgrs_enmap <l1_path>  [--cams_file file] [-o <ofile>] [--odir <odir>]\
+ [--opac_model name] [--levname <lev>] [--no_clobber]
+  hgrs_enmap -h | --help
+  hgrs_enmap -v | --version
 
 Options:
   -h --help        Show this screen.
@@ -18,8 +18,6 @@ Options:
   --odir odir       Ouput directory [default: ./]
   --levname lev     Level naming used for output product [default: L2A_hgrs]
   --no_clobber      Do not process <input_file> if <output_file> already exists.
-  --dem_file file   Absolute path of the DEM geotiff file (already subset for the S2 tile)
-
   --opac_model name  Force the aerosol model (OPAC) to be 'name'
                      (choice: ['ARCT_rh70', 'COAV_rh70', 'DESE_rh70',
                      'MACL_rh70', 'URBA_rh70']) (WARNING: not implemented yet)
@@ -29,7 +27,7 @@ Options:
       L1_path=
 
       CAMS_path=
-      hgrs $L1_path --cams_file $CAMS_path
+      hgrs_enmap $L1_path --cams_file $CAMS_path
 
 '''
 

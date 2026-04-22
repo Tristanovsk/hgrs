@@ -384,7 +384,10 @@ class Driver():
 
         # convolution with spectral responses
         spectral = Spectral(data.wl, data.fwhm.values)
-        F0 = spectral.convolve2(F0, expon=expon)
+        # TODO check which one better
+        #F0 = spectral.convolve2(F0, expon=expon)
+        F0 = spectral.convolve(F0)
+
         F0_sensor = solar_irr.convolve(F0, data.fwhm, info={'description': 'Convolved solar irradiance from TSIS data',
                                                             'unit': 'mW/m2/nm'})
 

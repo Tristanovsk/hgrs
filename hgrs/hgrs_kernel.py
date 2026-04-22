@@ -25,14 +25,19 @@ from . import AuxData
 
 opj = os.path.join
 
-
-configfile = importlib_resources.files(__package__).joinpath('..').joinpath('config.yml')
+configfile = importlib_resources.files(__package__).joinpath('config.yml')
 with open(configfile, 'r') as file:
     config = yaml.safe_load(file)
 
 HGRSDATA = config['path']['data_root']
 TOALUT = config['path']['toa_lut']
 TRANSLUT = config['path']['trans_lut']
+
+LUT_FILE = opj(HGRSDATA, TOALUT)
+TRANS_LUT_FILE = opj(HGRSDATA, TRANSLUT)
+ABS_GAS_FILE = resource_filename(__package__, 'data/lut/lut_abs_opt_thickness_normalized.nc')
+WATER_VAPOR_TRANSMITTANCE_FILE = resource_filename(__package__, 'data/lut/water_vapor_transmittance.nc')
+
 
 class Product():
     def __init__(self,
@@ -44,7 +49,7 @@ class Product():
         # spectral parameters
         self.wl_water_vapor = slice(800, 1300)
         self.wl_sunglint = slice(2150, 2250)
-        #self.wl_atmo = slice(950, 2450)
+        # self.wl_atmo = slice(950, 2450)
         self.wl_atmo = [1000, 1050, 1075, 1100, 1200, 1300, 1600, 1650, 1700, 2150, 2200, 2250]
         self.wl_non_neg = [419.457, 490, 560, 650, 750, 800, 865, 1650, 2250]
         self.wl_to_remove = [(935, 967), (1105, 1170), (1320, 1490), (1778, 2033), (2465, 2550)]
@@ -66,10 +71,10 @@ class Product():
         self.ang_resol = 1
 
         # pre-computed auxiliary data
-        self.lut_file = opj(HGRSDATA, TOALUT)
-        self.trans_lut_file = opj(HGRSDATA, TRANSLUT)
-        self.abs_gas_file = opj(HGRSDATA, 'lut_abs_opt_thickness_normalized.nc')
-        self.water_vapor_transmittance_file = opj(HGRSDATA, 'water_vapor_transmittance.nc')
+        self.lut_file = LUT_FILE
+        self.trans_lut_file = TRANS_LUT_FILE
+        self.abs_gas_file = ABS_GAS_FILE
+        self.water_vapor_transmittance_file = WATER_VAPOR_TRANSMITTANCE_FILE
 
         # mask thresholding parameters
         self.sunglint_threshold = 0.11
@@ -90,7 +95,7 @@ class Product():
         # xarray object to be processed
         self.raster = l1c_obj.copy()
 
-        self.fwhm = self.raster.fwhm.reset_coords(drop=True)#.to_dataframe()
+        self.fwhm = self.raster.fwhm.reset_coords(drop=True)  # .to_dataframe()
         self.wl = self.raster.wl
         self.sza_mean = np.nanmean(self.raster.sza)
         self.vza_mean = np.nanmean(self.raster.vza)
@@ -151,7 +156,7 @@ class Product():
             where(self.green_swir_index > self.green_swir_index_threshold).load()
 
     def get_omnicloudmask(self,
-                            rgnir):
+                          rgnir):
 
         '''
         Apply OmniCloudMAsk for clouds and cloud shadows masking
@@ -174,7 +179,6 @@ class Product():
         :return omnimask: raster of the retrieved mask
         '''
 
-
         pred = predict_from_array(rgnir.fillna(0).values)
         omnimask = xr.DataArray(pred[0],
                                 dims=["y", "x"],
@@ -186,9 +190,8 @@ class Product():
                                     description="OmniCloudMask, see https://github.com/DPIRD-DMA/OmniCloudMask",
                                     reference='https://doi.org/10.1016/J.RSE.2025.114694'),
                                 )
-        omnimask.name='omnimask'
+        omnimask.name = 'omnimask'
         return omnimask
-
 
     def round_angles(self):
         for param in ['sza', 'vza', 'raa']:
@@ -370,13 +373,14 @@ class Algo(Product):
         return palt
 
     def get_coarse_raster(self, variables=['sza', 'vza', 'raa', 'air_mass', 'Rtoa']):
-        self.coarse_raster = self.raster[variables].coarsen(x=self.xcoarsen, y=self.ycoarsen,boundary="pad").mean()
+        self.coarse_raster = self.raster[variables].coarsen(x=self.xcoarsen, y=self.ycoarsen, boundary="pad").mean()
 
     def get_coarse_masked_raster(self, variables=['sza', 'vza', 'raa', 'air_mass', 'Rtoa']):
-        self.coarse_masked_raster = self.raster[variables].coarsen(x=self.xcoarsen, y=self.ycoarsen,boundary="pad").mean()
+        self.coarse_masked_raster = self.raster[variables].coarsen(x=self.xcoarsen, y=self.ycoarsen,
+                                                                   boundary="pad").mean()
         self.coarse_masked_raster['water_pixel_number'] = self.raster['Rtoa']. \
             isel(wl=slice(10, 20)).mean(dim='wl'). \
-            coarsen(x=self.xcoarsen, y=self.ycoarsen,boundary="pad").count()
+            coarsen(x=self.xcoarsen, y=self.ycoarsen, boundary="pad").count()
 
     def get_gaseous_optical_thickness(self):
         gas_lut = self.gas_lut
@@ -394,7 +398,11 @@ class Algo(Product):
         self.get_gaseous_optical_thickness()
         wl_ref = self.gas_lut.wl  # .values
         Tg = np.exp(- self.air_mass_mean * self.abs_gas_opt_thick)
-        self.Tg_other = self.spectral.convolve2(Tg,name='Ttot',expon=self.expon)
+
+        # TODO check which one better
+        # self.Tg_other = self.spectral.convolve2(Tg,name='Ttot',expon=self.expon)
+        self.Tg_other = self.spectral.convolve(Tg, name='Ttot')
+
         # fwhms = self.raster.fwhm.reset_coords(drop=True).to_dataframe()
         # Tg_int = []
         # for mu, fwhm in fwhms.iterrows():
@@ -439,7 +447,6 @@ class Algo(Product):
         if self.Twv_raster is None:
             print('xarray of water vapor transmittance is not set, please run get_wv_transmittance_raster(tcwv_raster)')
             return
-
 
         raster[variable] = raster[variable] / self.Twv_raster
         raster[variable].attrs['water_vapor_correction'] = True
@@ -530,7 +537,7 @@ class WaterVapor(Solver):
         # get data for the subset of "water vapor" wavelengths
         data = self.raster[variable].sel(wl=prod.wl_water_vapor)
         self.data = data
-        self.nwl, self.height, self.width  = data.shape
+        self.nwl, self.height, self.width = data.shape
         self.x = data.x
         self.y = data.y
         self.wl = data.wl
@@ -611,7 +618,7 @@ class WaterVapor(Solver):
         p = Pool()
         res = p.map(chunk_process, window_idxs)
         result = np.ctypeslib.as_array(shared_array)
-        self.result=result
+        self.result = result
         self.water_vapor = xr.Dataset(dict(tcwv=(["y", "x"], result[:, :, 0].T),
                                            tcwv_std=(["y", "x"], result[:, :, 3].T)),
                                       coords=dict(
@@ -627,8 +634,8 @@ class Aerosol(Solver):
 
     def __init__(self, prod,
                  aerosol_model='COAV_rh70',
-                 first_guess=[0.01,0],
-                 aot550_limits=[0.002,0.8],
+                 first_guess=[0.01, 0],
+                 aot550_limits=[0.002, 0.8],
                  raster_name='coarse_masked_raster',
                  variable='Rtoa'):
 
@@ -681,7 +688,7 @@ class Aerosol(Solver):
         self.sunglint_eps = auxdata.sunglint_eps.interp(wl=wl)
         self.rot = auxdata.rot.interp(wl=wl) * self.pressure / self.auxdata.pressure_rot_ref
 
-        aot_refs = [0,*np.logspace(-3, np.log10(0.8), 100)]
+        aot_refs = [0, *np.logspace(-3, np.log10(0.8), 100)]
         self.aot_lut = self.aero_lut.sel(model=self.aerosol_model).aot.interp(wl=wl, method='quadratic').interp(
             aot_ref=aot_refs,
             method='quadratic').dropna('aot_ref')  # sel(wl=wl_glint)
@@ -702,7 +709,8 @@ class Aerosol(Solver):
         Rdiff = Rtoa_lut.interp(aot_ref=aot_ref)
         Tdir = self.transmittance_dir(aot, self.air_mass, rot=rot)
         sunglint_corr = Tdir * sunglint_eps
-        Rdir = sunglint_corr * BRDFg / (Tdir.sel(wl=self.wl_sunglint)*sunglint_eps.sel(wl=self.wl_sunglint)).mean(dim='wl')
+        Rdir = sunglint_corr * BRDFg / (Tdir.sel(wl=self.wl_sunglint) * sunglint_eps.sel(wl=self.wl_sunglint)).mean(
+            dim='wl')
         # sunglint_toa.Rtoa.plot(x='wl',hue='aot_ref',ax=axs[0])
 
         return Rdiff + Rdir
@@ -768,7 +776,7 @@ class Aerosol(Solver):
                     # print(wl_,aot_,rot_,Rtoa_lut_,sunglint_eps_, y)
                     #    break
 
-                    std = [min_res.fun, np.sum(min_res.jac**2)]
+                    std = [min_res.fun, np.sum(min_res.jac ** 2)]
                     tmp[ix, iy, :] = [*xres, *std]
 
         window_idxs = [(i, j) for i, j in
@@ -818,11 +826,11 @@ class Aerosol(Solver):
         aot_refs = np.unique(aot_ref_vals)
         aot_refs = aot_refs[~np.isnan(aot_refs)]
         # TODO update LUT for aot< 0.001
-        aot_refs[aot_refs<0.002]=0.002
+        aot_refs[aot_refs < 0.002] = 0.002
 
         # if rounded aot_ref has unique value
         if len(aot_refs) == 1:
-            aot_refs = np.concatenate([ aot_refs, 1.2 * aot_refs])
+            aot_refs = np.concatenate([aot_refs, 1.2 * aot_refs])
         aots = self.aot_lut.interp(aot_ref=aot_refs, method='linear')
         aots = aots.interp(aot_ref=aot_ref_vals, method='nearest')
 
@@ -890,6 +898,7 @@ def super_gaussian_fwhm2sigma(fwhm,
     :return:
     '''
     return fwhm / 2 * (2 * np.log(2)) ** (-1 / expon)
+
 
 class Spectral():
     def __init__(self,
@@ -976,7 +985,7 @@ class Spectral():
 
             # remove values above a given threshold to speed up computation
             idx = rsr > threshold
-            wl_signal_ =wl_signal[idx]
+            wl_signal_ = wl_signal[idx]
             signal_ = signal[idx]
             rsr = rsr[idx]
 
@@ -1002,8 +1011,8 @@ class Spectral():
         fwhm = self.fwhm.values
         wl = self.fwhm.wl.values
         xdims = signal.dims
-        attrs=signal.attrs
-        name=signal.name
+        attrs = signal.attrs
+        name = signal.name
         if len(xdims) == 1:
             signal_int = self.convolve2_(wl_ref, signal.values, wl, fwhm, expon, threshold=threshold)
             signal_int = xr.DataArray(signal_int, name=name,
@@ -1027,7 +1036,7 @@ class Spectral():
                                            dim: value})
                     xsignal_int_.append(_)
                 xsignal_int.append(xr.concat(xsignal_int_, dim=dim))
-            signal_int = xr.merge(xsignal_int)#.to_dataarray()
+            signal_int = xr.merge(xsignal_int)  # .to_dataarray()
             signal_int.attrs = attrs
 
         return signal_int
