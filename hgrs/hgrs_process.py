@@ -21,7 +21,7 @@ import hgrs
 
 opj = os.path.join
 
-configfile = importlib_resources.files(__package__).joinpath('..').joinpath('config.yml')
+configfile = importlib_resources.files(__package__).joinpath('config.yml')
 with open(configfile, 'r') as file:
     config = yaml.safe_load(file)
 
@@ -53,10 +53,12 @@ class Process():
         # action = 'load L1C image plus angle rasters'
         # pbar = tqdm(total=len(action),
         #             desc=action + f": {img_path} ")
+        driver = hgrs.Driver('enmap')
+        l1_prod = driver.read_l1c_enmap(img_path, reflectance_unit=True)
         if isinstance(img_path, str):
             try:
                 driver = hgrs.Driver('enmap')
-                l1_prod = driver.driver(img_path, reflectance_unit=True)
+                l1_prod = driver.read_l1c_enmap(img_path, reflectance_unit=True)
             except:
                 logging.info('input file format not recognized, stop')
                 return

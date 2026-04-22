@@ -72,10 +72,10 @@ irr.load_F0()
 
 params = ['Lwn','Lwn_IOP','Lwn_f/Q']
 
-Ttot_Ed=xr.open_dataset('/DATA/git/satellite_app/hgrs/data/lut/transmittance_downward_irradiance.nc')
-ratio_kurucz_thuillier=xr.open_dataarray('/DATA/git/satellite_app/hgrs/data/aux/ratio_kurucz_thuillier.nc')
-ratio_kurucz_gueymard=xr.open_dataarray('/DATA/git/satellite_app/hgrs/data/aux/ratio_kurucz_gueymard.nc')
-lut_file = '/DATA/git/satellite_app/hgrs/data/lut/opac_osoaa_lut_v3.nc'
+Ttot_Ed=xr.open_dataset('/hgrs/data/lut/transmittance_downward_irradiance.nc')
+ratio_kurucz_thuillier=xr.open_dataarray('/hgrs/data/aux/ratio_kurucz_thuillier.nc')
+ratio_kurucz_gueymard=xr.open_dataarray('/hgrs/data/aux/ratio_kurucz_gueymard.nc')
+lut_file = '/hgrs/data/lut/opac_osoaa_lut_v3.nc'
 aero_lut = xr.open_dataset(lut_file)
 aero_lut['wl']=aero_lut['wl']*1000
 

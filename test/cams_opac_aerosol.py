@@ -12,7 +12,7 @@ import hgrs
 opj = os.path.join
 plt.ioff()
 
-lut_file = '/DATA/git/satellite_app/hgrs/data/lut/opac_osoaa_lut_v3.nc'
+lut_file = '/hgrs/data/lut/opac_osoaa_lut_v3.nc'
 aero_lut = xr.open_dataset(lut_file)
 aero_lut['wl']=aero_lut['wl']*1000
 

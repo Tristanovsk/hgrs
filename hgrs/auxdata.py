@@ -23,14 +23,14 @@ opj = os.path.join
 # ******************************************************************************************************
 dir, filename = os.path.split(__file__)
 
-thuillier_file = resource_filename(__package__, '../data/aux/ref_atlas_thuillier3.nc')
-gueymard_file = resource_filename(__package__, '../data/aux/NewGuey2003.dat')
-kurucz_file = resource_filename(__package__, '../data/aux/kurucz_0.1nm.dat')
+thuillier_file = resource_filename(__package__, 'data/aux/ref_atlas_thuillier3.nc')
+gueymard_file = resource_filename(__package__, 'data/aux/NewGuey2003.dat')
+kurucz_file = resource_filename(__package__, 'data/aux/kurucz_0.1nm.dat')
 tsis_file = resource_filename(__package__,
-                              '../data/aux/hybrid_reference_spectrum_p1nm_resolution_c2022-11-30_with_unc.nc')
+                              'data/aux/hybrid_reference_spectrum_p1nm_resolution_c2022-11-30_with_unc.nc')
 
-sunglint_eps_file = resource_filename(__package__, '../data/aux/mean_rglint_small_angles_vza_le_12_sza_le_60.txt')
-rayleigh_file = resource_filename(__package__, '../data/aux/rayleigh_bodhaine.txt')
+sunglint_eps_file = resource_filename(__package__, 'data/aux/mean_rglint_small_angles_vza_le_12_sza_le_60.txt')
+rayleigh_file = resource_filename(__package__, 'data/aux/rayleigh_bodhaine.txt')
 
 
 class AuxData():
