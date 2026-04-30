@@ -13,17 +13,17 @@ conda install -c conda-forge hvplot bokeh panel datashader jupyter jupyterlab
 
 ### Installing
 
-First, clone [the repository](https://github.com/Tristanovsk/prismapy#) and execute the following command in the
+First, clone [the repository](https://github.com/Tristanovsk/hgrs#) and execute the following command in the
 local copy:
 
 ```
 pip install . 
 ```
 
-Optional dependency, if you want to use the reprojection feature for PRISMA please install xemsf:
+Current code rely on the import of xesmf/gdal. TODO: make it an optional dependency, if you want to use the reprojection feature for PRISMA please install xemsf:
 
 ```commandline
-conda install xesmf
+conda install xesmf gdal
 ```
 
 ## Examples

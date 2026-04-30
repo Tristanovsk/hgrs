@@ -20,9 +20,7 @@ from .hgrs_kernel import (
     Aerosol,
     Product,
 )
-from .spectral_sensitivity import (
-    Spectral,
-)
+
 from .hgrs_process import Process
 from .driver import Driver
 

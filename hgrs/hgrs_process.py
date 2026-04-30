@@ -2,7 +2,6 @@
 
 import os, copy
 
-import importlib_resources
 import yaml
 import glob
 
@@ -17,8 +16,7 @@ import datetime as dt
 import logging
 
 import hgrs
-from hgrs.hgrs_kernel import SensorDescription, LUTTables, CAMSProduct
-from hgrs.spectral_sensitivity import BaselineInterp
+from hgrs.hgrs_kernel import LUTTables, CAMSProduct
 
 
 class Process:
@@ -31,17 +29,16 @@ class Process:
         self.flags_tomask = [0, 1, 10, 13, 14, 18]
         self.successful = False
 
-    def execute(self, img_path, cams_path):
+    def execute(self, img_path, cams_path, geoproject=True):
 
         # ---------------------------------------
         # construct L1C image plus angle rasters
         # ---------------------------------------
         logging.info("construct L1C image plus angle rasters")
         # action = 'load L1C image plus angle rasters'
-        # pbar = tqdm(total=len(action),
-        #             desc=action + f": {img_path} ")
-        from pathlib import Path
-        import pickle
+        # pbar = tqdm(total=len(action), desc=action + f": {img_path} ")
+        # from pathlib import Path
+        # import pickle
 
         # path_pkl = Path("test.pkl")
         # if not path_pkl.exists():
@@ -49,14 +46,16 @@ class Process:
         if isinstance(img_path, str):
             # try:
             driver = hgrs.Driver("enmap")
-            l1_prod = driver.driver(img_path, reflectance_unit=True)
+            l1_prod, sensor_desc = driver.driver(img_path, reflectance_unit=True)
             # except:
             #     logging.info("input file format not recognized, stop")
             #     return
         else:
             # try:
             driver = hgrs.Driver("prisma")
-            l1_prod = driver.read_prisma(img_path[0], img_path[1])
+            l1_prod, sensor_desc = driver.read_prisma(
+                img_path[0], img_path[1], geoproject=geoproject
+            )
 
             # except Exception as e:
             #     logging.info("input file format not recognized, stop")
@@ -69,40 +68,29 @@ class Process:
         #         l1_prod = pickle.load(f)
         # get L1C object
         self.l1_prod = l1_prod
-        wl_sensor = np.array(l1_prod.wl_sensor)
-        fwhm = l1_prod.fwhm.reset_coords(drop=True)  # .to_dataframe()
-        sza_mean = np.nanmean(l1_prod.sza)
-        vza_mean = np.nanmean(l1_prod.vza)
-        raa_mean = np.nanmean(l1_prod.raa)
-        air_mass = self.get_air_mass(l1_prod.vza, l1_prod.sza)
-        l1_prod["air_mass"] = air_mass
-        air_mass_mean = np.nanmean(air_mass.values)
-
-        sensor_modelisation = BaselineInterp(
-            wl_sensor
-        )
-        sensor_modelisation_lr = BaselineInterp(
-            wl_sensor, inter_mod="quadratic"
-        )
-        # TODO (antoine): define the SensorDescription inside the driver
-        sensor_desc = SensorDescription(
-            wl_sensor,
-            fwhm,
-            sza_mean,
-            vza_mean,
-            raa_mean,
-            air_mass_mean,
-            sensor_modelisation,
-            sensor_modelisation_lr
-        )
 
         # -----------------------------------------
         # get CAMS and set atmospheric parameters
         # -----------------------------------------
         date = l1_prod.time
-        raster = l1_prod.sza.rio.reproject(4326)
-        clon, clat = float(raster.x.mean()), float(raster.y.mean())
 
+        if "UL" in l1_prod.attrs.keys():
+            points = np.array(
+                [
+                    l1_prod.attrs["UL"],
+                    l1_prod.attrs["UR"],
+                    l1_prod.attrs["LL"],
+                    l1_prod.attrs["LR"],
+                ],
+                dtype=np.float32,
+            )
+            clon, clat = np.mean(points[:, 0]), np.mean(points[:, 1])
+        elif hasattr(l1_prod, "sza") and hasattr(l1_prod.sza.rio, "x"):
+
+            raster = l1_prod.sza.rio.reproject(4326)
+            clon, clat = float(raster.x.mean()), float(raster.y.mean())
+        else:
+            raise Exception(f"unable to check geoerferencing of {l1_prod}")
         # pbar.refresh()
 
         logging.info("get CAMS and set atmospheric parameters")
@@ -122,6 +110,8 @@ class Process:
         prod = hgrs.Algo(
             l1_prod, cams_product, lut_tables, sensor_desc, xcoarsen=20, ycoarsen=20
         )
+        self.prod = prod
+
         prod.round_angles()
 
         # -----------------------------------------
@@ -134,17 +124,19 @@ class Process:
         red_index = 670
         green_index = 550
         nir_index = 940
-        rgnir = prod.raster.Rtoa.sel(
-            wl_sensor=[red_index, green_index, nir_index], method="nearest"
-        ).fillna(
-            0
+        rgnir = (
+            prod.raster.Rtoa.sel(
+                wl_sensor=[red_index, green_index, nir_index], method="nearest"
+            )
+            .fillna(0)
+            .transpose("wl_sensor", "y", "x")
         )  # .values
         omnimask = prod.get_omnicloudmask(rgnir)
         # fill na the clouds & non water pixels
         prod.raster["Rtoa"] = prod.raster["Rtoa"].where(omnimask == 0)
 
         logging.info("Apply water masking")
-        prod.apply_water_masks()  # TODO (antoine): delete .load (dask processing on disk)
+        prod.apply_water_masks()
 
         # -----------------------------------------
         # Construct coarse resolution raster
@@ -199,16 +191,33 @@ class Process:
         # full resolution processing
         # ------------------------------------------
         logging.info("process full resolution")
+        # ------------------------------------------
+        # full resolution pre-processing
+        # ------------------------------------------
+
         prod.drop_band_predefined("raster", variable=variable)  # state coarse (bands)
         prod.drop_band_high_gaz_absorption("raster", variable=variable)  # state (bands)
+
+        # ------------------------------------------
+        # Other Gas
+        # ------------------------------------------
+
         prod.other_gas_correction(raster_name="raster", variable=variable)
 
         # ------------------------------------------
         # water vapor
         # ------------------------------------------
-        # TODO: use xarray to avoid chunk for both raster
         prod.fullres_water_vapor_correction()
+
+        # ------------------------------------------
+        # Glint
+        # ------------------------------------------
+
         Rrs, BRDF_sunglint = prod.fullres_aeroglint_correction()
+
+        # ------------------------------------------
+        # bidirectional transmitance (aerosols)
+        # ------------------------------------------
 
         l2_prod = xr.Dataset(
             dict(
@@ -216,14 +225,17 @@ class Process:
                 brdfg_full=(["y", "x"], BRDF_sunglint),
             ),
             coords=dict(
-                x=prod.raster.x, y=prod.raster.y, wl_sensor=prod.raster.wl_sensor,
-                fwhm= prod.raster.fwhm
+                x=prod.raster.x,
+                y=prod.raster.y,
+                wl_sensor=prod.raster.wl_sensor,
+                fwhm=prod.raster.fwhm,
             ),
         )
 
         # finally correct for down and upward transmittances (aerosols)
 
         Ttot = prod.compute_atmo_bidir_transmittance()
+
         l2_prod["Rrs"] = l2_prod.Rrs / Ttot
 
         # -----------------------------
@@ -233,24 +245,17 @@ class Process:
 
         # -----------------------------
         # data
-        wv = prod.wv_retrieval.water_vapor # half shift
+        wv = prod.wv_retrieval.water_vapor  # half shift
         aero = aero_retrieval.aero_img
         water_pixel_prop = prod.derive_water_pixel_prop()
         # geom = prod.raster[['lon', 'lat']].drop_vars('tcwv')
         # Rrs_ = Rrs_l2.reset_coords().drop_vars(['model', 'z']).rename({'tcwv': 'tcwv_full', 'aot_ref': 'aot_ref_full'}).set_coords(['time','spatial_ref'])
-        l2_prod = xr.merge([l2_prod, wv, aero, water_pixel_prop]) 
+        l2_prod = xr.merge([l2_prod, wv, aero, water_pixel_prop])
         # l2_prod['brdfg_full'] = BRDF_sunglint
         prod.complete_L2A_attributes(l2_prod)
         self.l2_prod = l2_prod
         self.successful = True
-
         return
-
-    def get_air_mass(self, vza, sza, round=True, digit_resol=3):
-        air_mass = 1.0 / np.cos(np.radians(sza)) + 1.0 / np.cos(np.radians(vza))
-        if round:
-            return air_mass.round(digit_resol)
-        return air_mass
 
     def write_output(self, ofile):
         ######################################

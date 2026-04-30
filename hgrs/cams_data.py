@@ -63,6 +63,7 @@ class CAMSProduct:
 
         # set gases and pressure
         self.pressure = float(cams.sp) * 1e-2
+        # TODO: altitude impact ?
 
         self.to3c = float(cams.gtco3)
         self.tno2c = float(cams.tcno2)

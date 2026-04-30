@@ -88,7 +88,7 @@ class Solver:
 
     def solve(
         self,
-        data,
+        data: xr.DataArray,
         water_pix_prop,
         process_parameters: ProcessMegaPixParameters,
         dim_na="wl_sensor",
@@ -110,6 +110,8 @@ class Solver:
         else:
             mask = None
 
+        # TODO (antoine): this is not working using pip install .
+        # use apply_block xarray instead
         def chunk_process(args):
 
             window_x, window_y = args
@@ -161,14 +163,13 @@ class WaterVapor(Solver):
     def toa_simu(self, wl, Twv, tcwv, a, b):
         """wl in micron"""
         # print(Twv.tcwv)
-        return Twv.interp(tcwv=tcwv, method="linear").values * (a * wl + b)
+        return Twv.interp(tcwv=tcwv, method="linear") * (a * wl + b)
 
     def toa_simu2(self, wl, Twv, tcwv, c0, c1, c2, c3):
 
-        return (
-            c0 * np.exp(-c1 * wl**-c2) * self.Twv_.interp(tcwv=tcwv).values
-            + c3 * self.wl_**-3 * self.Twv_.interp(tcwv=0.3 * tcwv).values
-        )
+        return c0 * np.exp(-c1 * wl**-c2) * self.Twv_.interp(
+            tcwv=tcwv
+        ) + c3 * self.wl_**-3 * self.Twv_.interp(tcwv=0.3 * tcwv)
 
     def func(self, x, Twv, wl, y):
         return self.toa_simu(wl, Twv, *x) - y
@@ -206,14 +207,14 @@ class WaterVapor(Solver):
         y = data.yc
         data = data.sel(wl_sensor=self.wl_water_vapor)
 
-        # TODO (tristan) improve to process the air mass raster instead of scalar mean value
         # TODO (tristan) check impact of method = 'nearest'
         self.air_mass_mean = air_mass_mean
         self.Twv_ = self.Twv_lut.sel(wl_sensor=data.wl_sensor).interp(
             air_mass=air_mass_mean
         )
-        self.wl_mic = self.Twv_["wl_sensor"] / 1000
-        self.Twv_["wl_sensor_wv_mic"] = self.wl_mic
+        wl_mic = self.Twv_["wl_sensor"] / 1000
+        self.Twv_["wl_sensor_wv_mic"] = wl_mic
+        self.wl_mic = wl_mic.values
         result = super().solve(data, water_pix_prop, process_parameters)
         self.result = result
         self.water_vapor = xr.Dataset(
@@ -304,18 +305,19 @@ class Aerosol(Solver):
         - initial LUT interpolation to wl of sensor
         - redifinition of used wl
         """
-        wl_sensor, sza, vza = (
-            sensor_desc.wl_sensor,
+        sza, vza = (
             sensor_desc.sza_mean,
             sensor_desc.vza_mean,
         )
         auxdata = self.auxdata
 
         raa_lut = self.raa_lut
-        # TODO: what about rot, aot_lut, Rtoa_lut interpolation ?
-
-        self.sunglint_eps = sensor_desc.sensor_mod.convolve(auxdata.sunglint_eps)
-        rot = sensor_desc.sensor_mod.convolve(auxdata.rot)
+        self.sunglint_eps = sensor_desc.sensor_mod.convolve(
+            auxdata.sunglint_eps,
+        )
+        rot = sensor_desc.sensor_mod.convolve(
+            auxdata.rot, fallback_int=[2450, 2550]
+        )  # 2450-2550: 50nm res only for rot
 
         self.rot = rot * (self.pressure / self.auxdata.pressure_rot_ref)
 
@@ -466,7 +468,7 @@ class Aerosol(Solver):
 
         self.prepare_lut(self.sensor_description)
         # # TODO (Tristan) update LUT for aot< 0.001
-        # # faster version is possible:
+        # # faster version is possible ?
         aot_ref_smooth = self.aero_img.aot_ref_smoothed
         aot_ref_median = aot_ref_smooth.median()
         aot_ref_vals = aot_ref_smooth.fillna(aot_ref_median)
@@ -494,10 +496,9 @@ class Aerosol(Solver):
         return aots, Rdiffs, Tdirs
 
     def compute_atmo_bidir_transmittance(self):
-        # TODO (tristan) compute pixel wise
         aot_ref = float(self.aero_img.aot_ref.mean())
         Ttot_Ed_opacmodel = self.Ttot_Ed.sel(model=self.aerosol_model)
-        sensor_mod = self.sensor_description.sensor_mod
+        sensor_mod = self.sensor_description.sensor_mod_lr
         Ttot_Ed_ = Ttot_Ed_opacmodel.interp(sza=self.sza_mean, method="cubic").interp(
             aot_ref=aot_ref, method="quadratic"
         )

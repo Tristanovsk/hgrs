@@ -12,9 +12,7 @@ class Reproj:
         pass
 
     @staticmethod
-    def regridding(
-        input_dataset, output_grid_size=(1200, 1200), d_input_crs=4326, parallel=True
-    ):
+    def regridding(input_dataset, new_grid, parallel=True):
         """
         Take a PRISMA L1C product in sensor geometry (x,y) as input and
         return it in a georeferenced geometry (lon,lat).
@@ -25,32 +23,16 @@ class Reproj:
         (see https://github.com/JiaweiZhuang/xESMF/issues/25).
 
         :param input_dataset: the product to regrid
-        :param output_grid_size: (tuple) output grid size in (lon, lat) format
+        :param new_grid: grid
+
         :param d_input_crs: (int) code EPSG of the related geolocalisation frame
 
         :return output_dataset: the regularised product
         """
-        # TODO (antoine): use PRISMA georeferencing to correct sensor deformation
         logging.info("georeferencing native image")
         # setting lon and lat as coordinates
-        attrs = input_dataset.attrs
-        # input_dataset = input_dataset.set_coords(["lon", "lat"])
 
-        # make the grid that the data will be regridded to
-        grid_lons = np.linspace(
-            input_dataset.lon.min().values,
-            input_dataset.lon.max().values,
-            output_grid_size[0],
-        )
-        grid_lats = np.linspace(
-            input_dataset.lat.min().values,
-            input_dataset.lat.max().values,
-            output_grid_size[1],
-        )
-        new_grid = xr.Dataset(
-            {"lat": (["lat"], grid_lats), "lon": (["lon"], grid_lons)}
-        )
-        new_grid = new_grid.chunk({"lat": 50, "lon": 50})
+        # input_dataset = input_dataset.set_coords(["lon", "lat"])
 
         # use periodic=False if either or both the lat and lon dimensions are not regular
         regridder = xe.Regridder(
@@ -65,19 +47,8 @@ class Reproj:
         # regrid the data
         output_dataset = regridder(input_dataset)
 
-        # put the wavelength dependant data lost in the process, back in the dataset
-        output_dataset = output_dataset.assign(
-            fwhm=input_dataset.fwhm, F0=input_dataset.F0
-        )
+        output_dataset = output_dataset.assign(fwhm=input_dataset.fwhm)
 
-        # put "x","y" naming:
-        output_dataset = output_dataset.rename({"lon": "x", "lat": "y"})
-
-        # adding the CRS
-        output_dataset.rio.write_crs(d_input_crs, inplace=True)
-        output_dataset.rio.set_spatial_dims(x_dim="x", y_dim="y", inplace=True)
-        output_dataset.rio.write_coordinate_system(inplace=True)
-        output_dataset.attrs.update(attrs)
         return output_dataset
 
 

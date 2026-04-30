@@ -1,36 +1,50 @@
-
 from setuptools import setup, find_packages
 
-__package__ = 'hgrs'
-__version__ = '1.1.0'
+__package__ = "hgrs"
+__version__ = "1.1.0"
 
 setup(
     name=__package__,
     version=__version__,
-    packages=find_packages(exclude=['build']),
+    packages=find_packages(exclude=["build"]),
     package_data={
-        '': ['*.nc', '*.txt', '*.csv', '*.dat'],
-        'data':['data/*']
-
+        "": ["*.nc", "*.txt", "*.csv", "*.dat"],
+        "data": ["data/*"],
+        "hgrs": ["config.yml"],
     },
     include_package_data=True,
-
-    url='',
-    license='Apache v2',
-    authors='T. Harmel',
-    author_email='tristan.harmel@magellium.fr; ',
-    description='Hyperspectral Glint Removal System: Atmospheric correction for aquatic scenes of hyperspectral (vis-SWIR) satellite images',
-
+    url="",
+    license="Apache v2",
+    authors="T. Harmel",
+    author_email="tristan.harmel@magellium.fr; ",
+    description="Hyperspectral Glint Removal System: Atmospheric correction for aquatic scenes of hyperspectral (vis-SWIR) satellite images",
     # Dependent packages (distributions)
-    install_requires=['numpy', 'scipy', 'pandas', 'xarray','rioxarray',
-                      'matplotlib', 'rasterio', 'cartopy',
-                      'numba','netcdf4','h5py',
-                      'geopandas','affine','shapely','memory_profiler' ],
-
+    install_requires=[
+        "numpy",
+        "scipy",
+        "pandas",
+        "xarray",
+        "rioxarray",
+        "matplotlib",
+        "rasterio",
+        "cartopy",
+        "numba",
+        "netcdf4",
+        "h5py",
+        "geopandas",
+        "affine",
+        "shapely",
+        "memory_profiler",
+        "docopt",
+        "pyyaml",
+        "omnicloudmask",
+        "scikit-learn",
+        "dask",
+    ],
     entry_points={
-        'console_scripts': [
-            'hgrs_prisma = hgrs.run_prisma:main',
-            'hgrs_enmap = hgrs.run_enmap:main'
-
-        ]}
+        "console_scripts": [
+            "hgrs_prisma = hgrs.run_prisma:main",
+            "hgrs_enmap = hgrs.run_enmap:main",
+        ]
+    },
 )

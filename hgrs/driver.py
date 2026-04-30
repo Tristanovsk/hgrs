@@ -14,7 +14,17 @@ from scipy.interpolate import RegularGridInterpolator
 import datetime as dt
 import logging
 
-from . import SolarIrradiance, Reproj, Misc, Spectral
+from pyproj import Transformer
+from pyproj.aoi import AreaOfInterest
+from pyproj.database import query_utm_crs_info
+import warnings
+
+
+from . import Reproj
+from hgrs.spectral_sensitivity import BaselineInterp, Gaussian, SuperGaussian
+from hgrs.hgrs_kernel import SensorDescription
+from hgrs.auxdata import SolarIrradiance, get_air_mass
+from hgrs.utils import Reproj, Misc
 
 
 class Driver:
@@ -41,23 +51,225 @@ class Driver:
     ):
         logging.info("construct L1C image plus angle rasters")
 
-        dc_l1c = self.read_l1c_prisma(
-            l1c_path, reflectance_unit=reflectance_unit, drop_vars=drop_vars
-        )
-        dc_l2c = self.read_l2c_prisma(l2c_path)
+        dc_l1c = self.read_l1c_prisma(l1c_path, drop_vars=drop_vars)
 
-        for param in ["sza", "vza", "raa"]:
+        # complete L1C with L2C params
+        dc_l2c = self.read_l2c_prisma(l2c_path)
+        georef_params = ["sza", "vza", "raa"]
+        for param in georef_params:
             dc_l1c[param] = dc_l2c[param]
+        for param in ["UL", "UR", "LL", "LR"]:
+            dc_l1c.attrs[param] = dc_l2c.attrs[param]
+            # sza_mean = np.nanmean(l1_prod.sza)
         del dc_l2c
+
+        air_mass = get_air_mass(dc_l1c.vza, dc_l1c.sza)
+        dc_l1c["air_mass"] = air_mass
+        dc_l1c.attrs["air_mass_mean"] = np.nanmean(air_mass)
+        wl = np.array(dc_l1c.wl_sensor)
+        fwhm = dc_l1c.fwhm.reset_coords(drop=True)
+        sensor_desc = self.get_sensordesc(
+            dc_l1c.sza, dc_l1c.vza, dc_l1c.raa, wl, fwhm, sensor="prisma"
+        )
+
+        # solar irradiance convolution to the PRISMA spectral response function and scaled
+        # by the day of the year
 
         # dc_l1c = dc_l1c.chunk({'x': 200, 'y': 200, 'wl': 10})
 
         if geoproject:
-            dc_l1c = Reproj().regridding(dc_l1c, parallel=parallel)
+            dc_l1c = self.reproject(dc_l1c, parallel=parallel)
+        if reflectance_unit:
+            self.perform_reflectance_corr(dc_l1c, sensor_desc)
+            if drop_vars:
+                dc_l1c = dc_l1c.drop_vars("Ltoa")
+        return dc_l1c.transpose("wl_sensor", "y", "x"), sensor_desc
 
-        return dc_l1c
+    def get_sensordesc(self, sza, vza, raa, wl_sensor, fwhm, sensor="prisma"):
+        # sza_mean = np.nanmean(l1_prod.sza)
+        # vza_mean = np.nanmean(l1_prod.vza)
+        # raa_mean = np.nanmean(l1_prod.raa)
+        # wl_sensor = np.array(l1_prod.wl_sensor)
+        # fwhm = l1_prod.fwhm.reset_coords(drop=True)  # .to_dataframe()
+        # air_mass = get_air_mass(l1_prod.vza, l1_prod.sza)
+        # l1_prod["air_mass"] = air_mass
+        # air_mass.values
 
-    def read_l1c_prisma(self, l1c_path: str, reflectance_unit=False, drop_vars=False):
+        sza_mean = np.nanmean(sza)
+        vza_mean = np.nanmean(vza)
+        raa_mean = np.nanmean(raa)
+        if sensor == "prisma":
+            sensor_modelisation = Gaussian(wl_sensor, fwhm)
+
+        elif sensor == "enmap":
+            sensor_modelisation = SuperGaussian(wl_sensor, fwhm, expon=3)
+        sensor_modelisation_lr = BaselineInterp(wl_sensor, inter_mod="quadratic")
+        sensor_desc = SensorDescription(
+            wl_sensor,
+            fwhm,
+            sza_mean,
+            vza_mean,
+            raa_mean,
+            sensor_modelisation,
+            sensor_modelisation_lr,
+        )
+
+        return sensor_desc
+
+    def perform_reflectance_corr(self, data, sensor_desc):
+
+        solar_irr = SolarIrradiance()
+        F0 = solar_irr.tsis  # huillier # gueymard # kurucz
+
+        date = data.time.values.astype("datetime64[us]").astype(dt.datetime)
+        DOY = date.timetuple().tm_yday
+        # get correction for Sun-Earth distance and correct solar irradiance
+        D2 = Misc.earth_sun_correction(DOY)
+        F0 = F0 * D2
+
+        info = (
+            {
+                "description": "Convolved solar irradiance from TSIS data",
+                "unit": "mW/m2/nm",
+            },
+        )
+        F0_sensor = sensor_desc.sensor_mod.convolve(
+            F0, dim="wl"
+        )  # info=info, name="F0"
+        F0_sensor.attrs = info
+
+        data["F0"] = (["wl_sensor"], F0_sensor.values)
+        data.F0.attrs["unit"] = "mW/m2/nm"
+        data.F0.attrs["definition"] = (
+            "Solar irradiance corrected for Sun-Earth distance"
+        )
+        data["Rtoa"] = np.pi * data.Ltoa / (data.F0 * np.cos(np.radians(data.sza)))
+        return data
+
+    def reproject(
+        self,
+        input_dataset,
+        parallel=False,
+        grid_mode="prisma_L2C",
+        raise_ambiguous=True,
+    ):
+
+        if grid_mode == "hgrs":
+            # Query the database for the most appropriate UTM CRS
+
+            output_grid_size = (1200, 1200)
+            grid_lons = np.linspace(
+                input_dataset.lon.min().values,
+                input_dataset.lon.max().values,
+                output_grid_size[0],
+            )
+            grid_lats = np.linspace(
+                input_dataset.lat.min().values,
+                input_dataset.lat.max().values,
+                output_grid_size[1],
+            )
+            new_grid = xr.Dataset(
+                {"lat": (["lat"], grid_lats), "lon": (["lon"], grid_lons)}
+            )
+
+        elif grid_mode == "prisma_L2C":
+            # same than above, exept the underlying georef is a rectilinear in target PRISMA EPSG (not lat/lon)
+            points = np.array(
+                [
+                    input_dataset.UL,
+                    input_dataset.UR,
+                    input_dataset.LL,
+                    input_dataset.LR,
+                ],
+                dtype=np.float32,
+            )
+            utm_crs_list = query_utm_crs_info(
+                datum_name="WGS 84",
+                area_of_interest=AreaOfInterest(
+                    west_lon_degree=np.min(np.array(points)[:, 0]),
+                    south_lat_degree=np.min(np.array(points)[:, 1]),
+                    east_lon_degree=np.max(np.array(points)[:, 0]),
+                    north_lat_degree=np.max(np.array(points)[:, 1]),
+                ),
+            )
+            if len(utm_crs_list) > 1:
+                if raise_ambiguous:
+                    raise Exception("Zone intersect several crs")
+
+                warnings.warn("Zone intersect several crs")
+                utm_crs_list = query_utm_crs_info(
+                    datum_name="WGS 84",
+                    area_of_interest=AreaOfInterest(
+                        west_lon_degree=np.mean(np.array(points)[:, 0]),
+                        south_lat_degree=np.mean(np.array(points)[:, 1]),
+                        east_lon_degree=np.mean(np.array(points)[:, 0]),
+                        north_lat_degree=np.mean(np.array(points)[:, 1]),
+                    ),
+                )
+
+            epsg = f"{utm_crs_list[0].auth_name}:{utm_crs_list[0].code}"
+            transformer = Transformer.from_crs(4326, epsg, always_xy=True)
+            utm_coords = np.array(
+                [transformer.transform(*p) for p in points], dtype=np.float32
+            )
+
+            # 1. Find the bounds for the data
+            min_e = utm_coords[:, 0].min()
+            max_e = utm_coords[:, 0].max()
+            min_n = utm_coords[:, 1].min()
+            max_n = utm_coords[:, 1].max()
+
+            # 2. Define the grid
+            # Let's assume a 10m GSD (Ground Sample Distance)
+            # If you need a specific shape (e.g. 1000x1000), use np.linspace instead
+            gsd = 30.0
+
+            grid_e = np.arange(
+                min_e, max_e + max_e * np.finfo(np.float32).resolution, gsd
+            )
+            grid_n = np.arange(
+                max_n, min_n - min_n * np.finfo(np.float32).resolution, -gsd
+            )  # Decreasing for North-to-South
+
+            ee, nn = np.meshgrid(grid_e, grid_n)
+            lons, lats = transformer.transform(
+                ee.flatten(), nn.flatten(), direction="INVERSE"
+            )
+            lons, lats = lons.reshape(ee.shape), lats.reshape(ee.shape)
+            # rectilinear grid in EPSG is curvilinear in lat/lon (only degree suported in xesmf)
+            new_grid = xr.Dataset(
+                coords={
+                    "lat": (["lat", "lon"], lats),
+                    "lon": (["lat", "lon"], lons),
+                }
+            )
+        else:
+            raise NotImplementedError(f"grid_mode {grid_mode} is not implemented")
+        new_grid = new_grid.chunk({"lat": 50, "lon": 50})
+        output_dataset = Reproj().regridding(input_dataset, new_grid, parallel=parallel)
+        output_dataset = output_dataset.rename({"lon": "x", "lat": "y"})
+        output_dataset.attrs.update(input_dataset.attrs)
+        if grid_mode == "prisma_L2C":
+            output_dataset["x"] = grid_e
+            output_dataset["y"] = grid_n
+            output_dataset.rio.write_crs(epsg, inplace=True)
+            output_dataset.rio.set_spatial_dims(x_dim="x", y_dim="y", inplace=True)
+            output_dataset.rio.write_coordinate_system(inplace=True)
+
+        elif grid_mode == "hgrs":
+            # put "x","y" naming:
+
+            # adding the CRS
+            d_input_crs = 4326
+            output_dataset.rio.write_crs(d_input_crs, inplace=True)
+            output_dataset.rio.set_spatial_dims(x_dim="x", y_dim="y", inplace=True)
+            output_dataset.rio.write_coordinate_system(inplace=True)
+        else:
+            raise NotImplementedError(f"grid_mode {grid_mode} is not implemented")
+
+        return output_dataset
+
+    def read_l1c_prisma(self, l1c_path: str, drop_vars=False):
         """
         Load PRISMA L1C data into xarray rasters
         :param l1c_path: absolute path to the .h5 prisma file
@@ -69,9 +281,6 @@ class Driver:
         # Load geolocation, solar irradiance and TOA radiance
         # =============================================================================
         ds = h5py.File(l1c_path)
-
-        # coarse geometry
-        sza = ds.attrs["Sun_zenith_angle"]
 
         # Geolocation
         lat = ds["/HDFEOS/SWATHS/PRS_L1_HCO/Geolocation Fields/Latitude_VNIR"][:].T
@@ -93,42 +302,30 @@ class Driver:
             coords=dict(wl_sensor=wl),
             attrs=dict(description="PRISMA relative spectral response parameter"),
         )
-
-        # solar irradiance convolution to the PRISMA spectral response function and scaled
-        # by the day of the year
-        solar_irr = SolarIrradiance()
-        F0 = solar_irr.tsis  # huillier # gueymard # kurucz
         date_str = ds.attrs["Product_StartTime"].decode("UTF-8")
-
-        DOY = dt.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%f").timetuple().tm_yday
-        # get correction for Sun-Earth distance and correct solar irradiance
-        D2 = Misc.earth_sun_correction(DOY)
-        F0 = F0 * D2
-        # TODO: check coherence with enmap
-        info = (
-            {
-                "description": "Convolved solar irradiance from TSIS data",
-                "unit": "mW/m2/nm",
-            },
-        )
-        F0_sensor = Spectral(wl, fwhm).convolve(F0)  # info=info, name="F0"
 
         # DN to TOA radiance
         gain = {
             "vnir": ds.attrs["ScaleFactor_Vnir"],
             "swir": ds.attrs["ScaleFactor_Swir"],
         }
+        offset = {
+            "vnir": ds.attrs["Offset_Vnir"],
+            "swir": ds.attrs["Offset_Swir"],
+        }
 
         # -------------------------------------------------------------------------------
         VNIR = np.moveaxis(
             ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/VNIR_Cube"][:, 5:, :]
-            / gain["vnir"],
+            / gain["vnir"]
+            - offset["vnir"],
             [0, 1, 2],
             [1, 2, 0],
-        )
+        )  # 2 missing wls for vnir
         SWIR = np.moveaxis(
             ds["/HDFEOS/SWATHS/PRS_L1_HCO/Data Fields/SWIR_Cube"][:, :-2, :]
-            / gain["swir"],
+            / gain["swir"]
+            - offset["swir"],
             [0, 1, 2],
             [1, 2, 0],
         )
@@ -141,7 +338,6 @@ class Driver:
         data = xr.Dataset(
             data_vars=dict(
                 Ltoa=(["y", "x", "wl_sensor"], Ltoa),
-                F0=(["wl_sensor"], F0_sensor.values),
                 fwhm=(["wl_sensor"], fwhm.values),
                 lon=(["y", "x"], lon),
                 lat=(["y", "x"], lat),
@@ -158,23 +354,11 @@ class Driver:
         # chunk data for dask
         # data = data.chunk({'x': 200, 'y': 200, 'wl': -1})
 
-        # TODO check errors due to bulk SZA value instead of per pixel values
-        if reflectance_unit:
-            data["Rtoa"] = np.pi * data.Ltoa / (data.F0 * np.cos(np.radians(sza)))
-        if drop_vars:
-            data = data.drop_vars("Ltoa")
-
         # =============================================================================
         # Load other metadata
         # =============================================================================
         data.attrs["L1C_product_name"] = os.path.basename(l1c_path)
         data.attrs["acquisition_date"] = date_str
-        data.attrs["sza"] = ds.attrs["Sun_zenith_angle"]
-        data.attrs["saa"] = ds.attrs["Sun_azimuth_angle"]
-        data.F0.attrs["unit"] = "mW/m2/nm"
-        data.F0.attrs["definition"] = (
-            "Solar irradiance corrected for Sun-Earth distance"
-        )
 
         # =============================================================================
         # Load masks
@@ -212,9 +396,24 @@ class Driver:
         # =============================================================================
         ds = h5py.File(l2c_path)
         # Geolocation
+
+        points = (
+            ds.attrs["Product_ULcorner_long"],
+            ds.attrs["Product_ULcorner_lat"],
+            ds.attrs["Product_URcorner_long"],
+            ds.attrs["Product_URcorner_lat"],
+            ds.attrs["Product_LLcorner_long"],
+            ds.attrs["Product_LLcorner_lat"],
+            ds.attrs["Product_LRcorner_long"],
+            ds.attrs["Product_LRcorner_lat"],
+        )
+        points = list(zip(points[::2], points[1::2]))
+
         lat = ds["/HDFEOS/SWATHS/PRS_L2C_HCO/Geolocation Fields/Latitude"][:].T
         lon = ds["/HDFEOS/SWATHS/PRS_L2C_HCO/Geolocation Fields/Longitude"][:].T
         xdim, ydim = lat.shape
+
+        UL, UR, LL, LR = points
 
         # Wavelength / fwhm
         wl = ds.attrs["List_Cw_Vnir"][3:]
@@ -321,6 +520,10 @@ class Driver:
             {"x2": np.arange(x2dim)[::-1], "y2": np.arange(y2dim)[::-1]}
         )
 
+        data.attrs["UL"] = UL
+        data.attrs["UR"] = UR
+        data.attrs["LL"] = LL
+        data.attrs["LR"] = LR
         return data
 
     def read_l1c_enmap(
@@ -519,25 +722,9 @@ class Driver:
         F0 = F0 * D2
         self.F0 = F0
 
-        # convolution with spectral responses
-        # TODO (antoine): avoid duplication of sensor modelisation
-        spectral = Spectral(data.wl_sensor, data.fwhm.values, expon=expon)
-        info = {
-            "description": "Convolved solar irradiance from TSIS data",
-            "unit": "mW/m2/nm",
-        }
-        # TODO (antoine): coherent convolution with other
-        F0_sensor = spectral.convolve2(F0)  #  copy_info=False, info=info
-        # F0_sensor = solar_irr.convolve(
-        #     F0,
-        #     data.fwhm,
-        #
-        # )
-
         data = xr.Dataset(
             data_vars=dict(
                 Ltoa=data.Ltoa,
-                F0=(["wl_sensor"], F0_sensor.values),
                 fwhm=(["wl_sensor"], data.fwhm.values),
                 sza=(["y", "x"], sza),
                 saa=(["y", "x"], saa),
@@ -553,13 +740,17 @@ class Driver:
             ),
             attrs=dict(description="EnMAP L1C cube data"),
         )
+        air_mass = get_air_mass(data.vza, data.sza)
+        data["air_mass"] = air_mass
+        data.attrs["air_mass_mean"] = np.nanmean(air_mass)
 
-        ## Compute Top of Atmosphere Reflectance
+        wl = np.array(data.wl_sensor)
+        fwhm = data.fwhm.reset_coords(drop=True)
+        sensor_desc = self.get_sensordesc(
+            data.sza, data.vza, data.raa, wl, fwhm, sensor="enmap"
+        )
         if reflectance_unit:
-            ## WARNING we take the mean SZA value to save time/memory               ##
-            ## this could  induce 0.1% uncertainty onn the Ltoa to Rtoa  conversion ##
-            mu0 = np.cos(np.radians(data.sza.mean()))
-            data["Rtoa"] = np.pi * data.Ltoa / (data.F0 * mu0)
+            self.perform_reflectance_corr(data, sensor_desc)
             if drop_vars:
                 data = data.drop_vars("Ltoa")
 
@@ -612,4 +803,4 @@ class Driver:
         data.fwhm.attrs["definition"] = "Full Width at Half Maximum"
         # data.attrs['crs'] = CRS.from_epsg(32630)
 
-        return data
+        return data, sensor_desc

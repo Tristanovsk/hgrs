@@ -1,5 +1,4 @@
 import os
-import importlib_resources
 import yaml
 
 import numpy as np
@@ -13,7 +12,6 @@ import hgrs
 from hgrs.solver import ProcessMegaPixParameters, WaterVapor, Aerosol
 from . import AuxData
 import datetime as dt
-from hgrs.spectral_sensitivity import Spectral
 from dataclasses import dataclass
 from hgrs.spectral_sensitivity import SensorDescription
 import xarray as xr
@@ -164,7 +162,7 @@ class Product:
         )
 
         # number of digits to keep for angle values
-        self.ang_resol = 1  # (degree?)
+        self.ang_resol = 1  # (degree)
 
         # lut:
         self.lut_tables = lut_tables
@@ -191,12 +189,11 @@ class Product:
         self.cams_data = cams
         self.aerosol_model = cams.aerosol_model
 
-        self.psl = 1013  # unused, del?
-        self.coef_abs_scat = 1.0  # ??
+        self.coef_abs_scat = 1.0
 
         aod550_mean = cams.aod550.mean().values
         # TODO (Tristan) double check regularization from CAMS AOT values
-        # Antoine: the retreived cams.aod550 is the aod value a closest value, not mean over area. Influence over bounds?
+        # TODO: (Antoine): the retreived cams.aod550 is a single values, and not mean over studied area. Can this impact bounds?
 
         # initialisation of the aerosol retreival
         aod550_std = cams.aod550.std().values
@@ -205,26 +202,15 @@ class Product:
         self.aod550_std = aod550_std
         self.aot550_min = 0.002  # np.max([aod550_mean - 2*aod550_std,0.001])
         self.aot550_max = self.aod550_mean + 2 * self.aod550_std
-        self.altitude = 0  # unused, del?
 
         self.Tg_other = None
         # get hgrs auxdata
-        self.auxdata = AuxData(self.sensor_description.wl_sensor)
+        self.auxdata = AuxData(self.sensor_description.sensor_mod)
 
         # spectral function for sensor response convolution
         # exponent of the super-gaussian spectral response function
         self.expon = expon
         # set the convolution module
-
-    @property
-    def hyp_spectral_char(self):
-        spectral_desc = self.sensor_description
-        spectral = Spectral(spectral_desc.wl_sensor, spectral_desc.fwhm)
-        return spectral
-
-    @property
-    def spectral(self):
-        return self.hyp_spectral_char
 
     def get_ndwi(self):
         green = self.raster.Rtoa.sel(
@@ -308,12 +294,6 @@ class Product:
         for param in ["sza", "vza", "raa"]:
             self.raster[param] = self.raster[param].round(self.ang_resol)
 
-    def get_air_mass(self, vza, sza, round=True, digit_resol=3):
-        air_mass = 1.0 / np.cos(np.radians(sza)) + 1.0 / np.cos(np.radians(vza))
-        if round:
-            return air_mass.round(digit_resol)
-        return air_mass
-
     # @staticmethod
     # def remove_wl_dataarray(xarr, wl_to_remove, drop=True):
     #     xarr_ = xarr.isel(x=1, y=1)
@@ -342,8 +322,6 @@ class Product:
         return xds.sel(wl_sensor=wl_final)
 
     # ------------------- PLOTS ---------------------
-    def plot_rsr(self):
-        return self.hyp_spectral_char.plot_rsr()
 
     def plots(
         self,
@@ -506,7 +484,7 @@ class Algo(Product):
 
     # ------------ OTHER gazes --------------
 
-    def get_gaseous_transmittance(self):
+    def get_gaseous_transmittance(self, air_mass_mean):
 
         gas_lut = self.gas_lut
 
@@ -524,16 +502,16 @@ class Algo(Product):
             / 1000
         )
         self.abs_gas_opt_thick = ot_ch4 + ot_no2 + ot_o3 + ot_air
-
-        Tg = np.exp(-self.sensor_description.air_mass_mean * self.abs_gas_opt_thick)
-        # TODO (antoine): convolution coherent with others
-        self.Tg_other = self.hyp_spectral_char.convolve2(
+        Tg = np.exp(-air_mass_mean * self.abs_gas_opt_thick)
+        self.Tg_other = self.sensor_description.sensor_mod.convolve(
             Tg
         )  # name="Ttot", copy_info=False
 
     def other_gas_correction(self, raster_name="coarse_masked_raster", variable="Rtoa"):
-        self.get_gaseous_transmittance()
         raster = self.__dict__[raster_name]
+        air_mass_mean = np.nanmean(self.__dict__[raster_name]["air_mass"])
+        self.get_gaseous_transmittance(air_mass_mean)
+
         attrs = raster[variable].attrs
         if attrs.__contains__("other_gas_correction") and attrs["other_gas_correction"]:
             print(
@@ -571,6 +549,7 @@ class Algo(Product):
         # raster_name="coarse_masked_raster",
         # variable="Rtoa",
         data = self.__dict__[raster_name][variable]
+        air_mass_mean = np.nanmean(self.__dict__[raster_name]["air_mass"])
         wv_retrieval = WaterVapor(
             Twv_lut=self.lut_tables.Twv_lut,
             wl_water_vapor=self.wl_water_vapor,
@@ -579,7 +558,7 @@ class Algo(Product):
         wv_retrieval.solve(
             data=data,
             water_pix_prop=self.derive_water_pixel_prop(raster_name),
-            air_mass_mean=self.sensor_description.air_mass_mean,
+            air_mass_mean=air_mass_mean,
             process_parameters=self.process_parameters,
         )
         self.wv_retrieval = wv_retrieval
@@ -618,6 +597,7 @@ class Algo(Product):
         raster_name = "coarse_masked_raster"
         variable = "Rtoa"
         raster = self.__dict__[raster_name]
+        air_mass_mean = np.nanmean(self.__dict__[raster_name]["air_mass"])
 
         aero_retrieval = Aerosol(
             wl_atmo=self.wl_atmo,
@@ -635,7 +615,7 @@ class Algo(Product):
         aero_retrieval.solve(
             raster[variable],
             raster["water_pix_prop"],
-            air_mass_mean=self.sensor_description.air_mass_mean,
+            air_mass_mean=air_mass_mean,
             sensor_desc=self.sensor_description,
             process_parameters=self.process_parameters,
         )  # state (create aero_img)
@@ -683,7 +663,7 @@ class Algo(Product):
         # results = np.full((height, width), 0, dtype=np.float32)
         twv_coarse = self.__dict__[raster_wv]
         # TODO (Antoine): resample twv_coarse for panchromatic usage
-        # TODO (Antoine): with chunking dask
+        # TODO (Antoine): with chunking dask?
         variable = "Rtoa"
         for iy in range(0, height, chunk):
             yc = min(height, iy + chunk)
@@ -788,7 +768,6 @@ class Algo(Product):
             "ang_resol",
             "abs_gas_file",
             "lut_file",
-            "water_vapor_transmittance_file",
             "sunglint_threshold",
             "ndwi_threshold",
             "green_swir_index_threshold",
@@ -796,9 +775,7 @@ class Algo(Product):
             "to3c",
             "tno2c",
             "tch4c",
-            "psl",
             "coef_abs_scat",
-            "altitude",
         ]
         dict_attrs = self.__dict__
         dict_attrs = dict_attrs.copy()

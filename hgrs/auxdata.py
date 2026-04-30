@@ -3,38 +3,25 @@ import os
 import numpy as np
 import pandas as pd
 import xarray as xr
-import rioxarray as rio
-
-import h5py
-import netCDF4 as nc
-import scipy.interpolate
-import scipy.integrate
-
 import matplotlib.pyplot as plt
-import cartopy.crs as crs
-import cartopy.feature as cf
 
-import datetime
 
-from pkg_resources import resource_filename
-
-opj = os.path.join
+import importlib_resources as resources
 
 # ******************************************************************************************************
 dir, filename = os.path.split(__file__)
-
-thuillier_file = resource_filename(__package__, "../data/aux/ref_atlas_thuillier3.nc")
-gueymard_file = resource_filename(__package__, "../data/aux/NewGuey2003.dat")
-kurucz_file = resource_filename(__package__, "../data/aux/kurucz_0.1nm.dat")
-tsis_file = resource_filename(
-    __package__,
-    "../data/aux/hybrid_reference_spectrum_p1nm_resolution_c2022-11-30_with_unc.nc",
+base_folder = resources.files("data").joinpath("aux")
+thuillier_file = base_folder.joinpath("ref_atlas_thuillier3.nc")
+gueymard_file = base_folder.joinpath("NewGuey2003.dat")
+kurucz_file = base_folder.joinpath("kurucz_0.1nm.dat")
+tsis_file = base_folder.joinpath(
+    "hybrid_reference_spectrum_p1nm_resolution_c2022-11-30_with_unc.nc",
 )
 
-sunglint_eps_file = resource_filename(
-    __package__, "../data/aux/mean_rglint_small_angles_vza_le_12_sza_le_60.txt"
+sunglint_eps_file = base_folder.joinpath(
+    "mean_rglint_small_angles_vza_le_12_sza_le_60.txt"
 )
-rayleigh_file = resource_filename(__package__, "../data/aux/rayleigh_bodhaine.txt")
+rayleigh_file = base_folder.joinpath("rayleigh_bodhaine.txt")
 
 
 class AuxData:
@@ -43,25 +30,18 @@ class AuxData:
 
     Args:
         - pressure_rot_ref: fixed reference pressure
-        - rot (xr.DataArray): Rayleigh Optical Thickness (nominal pressure, temperature, c02)
+        - rot (xr.DataArray): Rayleigh Optical Thickness (nominal pressure, temperature, c02) -> dim=
         - solar_irr (SolarIrradiance): solar irradiance
         - sunglint_eps (xr.DataArray)
     """
 
-    def __init__(self, wl_sensor):
+    def __init__(self, sensor_mod):
         # load data from raw files
-        self.solar_irr = SolarIrradiance()
-        # TODO (antoine): this is actually not use (solar irradiance only used in driver to convert to TOA radiance)
         self.sunglint_eps = pd.read_csv(
             sunglint_eps_file, sep=r"\s+", index_col=0
-        ).to_xarray()
+        ).to_xarray()["mean"]
         self.rayleigh()
         self.pressure_rot_ref = 1013.25
-
-        # reproject onto desired wavelengths
-        self.solar_irr.interp(wl=wl_sensor)  # inplace modification
-        self.sunglint_eps = self.sunglint_eps["mean"].interp(wl=wl_sensor)
-        self.rot = self.rot.interp(wl=wl_sensor)
 
     def rayleigh(self):
         """
@@ -163,11 +143,18 @@ class SolarIrradiance:
         )
         return solar_irr
 
-    def interp(self, wl=[440, 550, 660, 770, 880]):
-        """
-        Interpolation on new wavelengths
-        :param wl: wavelength in nm
-        :return: update variables of the class
-        """
-        self.thuillier = self.thuillier.interp(wl=wl)
-        self.gueymard = self.gueymard.interp(wl=wl)
+    # def interp(self, wl=[440, 550, 660, 770, 880]):
+    #     """
+    #     Interpolation on new wavelengths
+    #     :param wl: wavelength in nm
+    #     :return: update variables of the class
+    #     """
+    #     self.thuillier = self.thuillier.interp(wl=wl)
+    #     self.gueymard = self.gueymard.interp(wl=wl)
+
+
+def get_air_mass(vza, sza, round=True, digit_resol=3):
+    air_mass = 1.0 / np.cos(np.radians(sza)) + 1.0 / np.cos(np.radians(vza))
+    if round:
+        return air_mass.round(digit_resol)
+    return air_mass
