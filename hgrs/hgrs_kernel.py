@@ -19,7 +19,10 @@ import xarray as xr
 from hgrs.lut_tables import LUTTables
 from hgrs.cams_data import CAMSProduct
 from hgrs.spectral_sensitivity import SensorDescription
-
+from hgrs.utils import interpolate_xr
+import time
+from dask.distributed import Client, LocalCluster
+from dask import compute
 opj = os.path.join
 
 
@@ -649,42 +652,40 @@ class Algo(Product):
         )
         self.atmo_img.attrs["aerosol_model"] = self.aerosol_model
 
-    def compute_atmo_bidir_transmittance(self):
-        return self.aero_retrieval.compute_atmo_bidir_transmittance()
+
 
     # -------- Full resolution ------------
     def fullres_water_vapor_correction(
-        self, raster_name="raster", variable="Rtoa", raster_wv="Twv_raster", chunk=256
+        self, raster_name="raster", variable="Rtoa", raster_wv="Twv_raster", chunk=13
     ):
 
         raster = self.__dict__[raster_name]
-        var = raster[variable]
-        height, width, Nwl = len(raster.y), len(raster.x), len(raster.wl_sensor)
         # results = np.full((height, width), 0, dtype=np.float32)
         twv_coarse = self.__dict__[raster_wv]
-        # TODO (Antoine): resample twv_coarse for panchromatic usage
-        # TODO (Antoine): with chunking dask?
         variable = "Rtoa"
-        for iy in range(0, height, chunk):
-            yc = min(height, iy + chunk)
-            if yc > height:
-                continue
-            for ix in range(0, width, chunk):
-                xc = min(width, ix + chunk)
-                if xc > width:
-                    continue
-                tgt_var = var[:, iy:yc, ix:xc]
-                Twv_fullres = twv_coarse.interp(xc=tgt_var.x, yc=tgt_var.y).drop_vars(
-                    ["xc", "yc"]
-                )
-                raster[variable].data[:, iy:yc, ix:xc] = tgt_var / Twv_fullres
+        twv_coarse_int = (
+            interpolate_xr(twv_coarse, xdim = "xc", ydim="yc", additional_dims=("wl_sensor",), scale=20, chunk_size=chunk)
+            .rename({"xc":"x", "yc": "y"})
+        )
+        R_wc = (raster[variable] / twv_coarse_int)
+        cluster_kwargs = {
+            "n_workers": 1,
+            "threads_per_worker":1,
+        }
+        t = time.time()
+        with LocalCluster(**cluster_kwargs) as cluster:
+            with Client(cluster) as client:
+                
+                raster[variable] = R_wc.compute()
+        print("dt :", time.time()-t) # TODO (antoine): logger
+        pass
+
 
     def fullres_aeroglint_correction(
-        self, raster_name="raster", variable_hyp="Rtoa", chunk=256
+        self, raster_name="raster", variable_hyp="Rtoa", chunk=13
     ):
         raster = self.__dict__[raster_name]
 
-        height, width, Nwl = len(raster.y), len(raster.x), len(raster.wl_sensor)
 
         # retreived params
         Rdiff_full = (
@@ -694,43 +695,68 @@ class Algo(Product):
         sunglint_eps = self.aero_retrieval.sunglint_eps
 
         wl_sunglint = self.wl_sunglint
-
-        BRDF_sunglint = np.full((height, width), np.nan, dtype=np.float32)
-        Rrs = np.full((Nwl, height, width), np.nan, dtype=np.float32)
-        # TODO (antoine): resampling of apparent glint/ transmittance
-        # TODO (antoine): resampling of apparent glint
-        # TODO (antoine): with chunking dask
-        for iy in range(0, height, chunk):
-            yc = min(height, iy + chunk)
-            if yc > height:
-                continue
-            for ix in range(0, width, chunk):
-                xc = min(width, ix + chunk)
-                if xc > width:
-                    continue
-                # correct for diffuse path radiance
-                Rcorr = raster[variable_hyp][:, iy:yc, ix:xc]
-                Rdiff_full_ = Rdiff_full.interp(xc=Rcorr.x, yc=Rcorr.y).drop_vars(
-                    ["xc", "yc"]
+        Rdiff_full_int = (
+            interpolate_xr(Rdiff_full, xdim = "xc", ydim="yc", additional_dims=("wl_sensor",), scale=20, chunk_size=chunk)
+            .rename({"xc":"x", "yc": "y"})
+        )
+        Tdir_full_int = (
+            interpolate_xr(Tdir_full, xdim = "xc", ydim="yc", additional_dims=("wl_sensor", ), scale=20, chunk_size=chunk)
+            .rename({"xc":"x", "yc": "y"})
+        )
+        Rcorr = raster[variable_hyp]
+        BRDF_sunglint = (
+            Rcorr.sel(wl_sensor=wl_sunglint)
+            / (
+                Tdir_full_int.sel(wl_sensor=wl_sunglint)
+                * sunglint_eps.sel(wl_sensor=wl_sunglint)
+            )
+        ).mean(dim="wl_sensor")
+        Rdir = Tdir_full_int * sunglint_eps * BRDF_sunglint
+        Rcorr_g = (Rcorr - Rdiff_full_int - Rdir) 
+         
+        cluster_kwargs = {
+            "n_workers": 1,
+            "threads_per_worker":1,
+        }
+        t = time.time()
+        with LocalCluster(**cluster_kwargs) as cluster:
+            with Client(cluster) as client:
+                BRDF_sunglint, Rcorr_g = compute(
+                    BRDF_sunglint,
+                    Rcorr_g
                 )
-                Rcorr = Rcorr - Rdiff_full_
+        raster[variable_hyp] = Rcorr_g
+        print("dt :", time.time()-t) # TODO (antoine): logger
 
-                Tdir_full_ = Tdir_full.interp(xc=Rcorr.x, yc=Rcorr.y).drop_vars(
-                    ["xc", "yc"]
-                )
-                BRDF_sunglint_ = (
-                    Rcorr.sel(wl_sensor=wl_sunglint)
-                    / (
-                        Tdir_full_.sel(wl_sensor=wl_sunglint)
-                        * sunglint_eps.sel(wl_sensor=wl_sunglint)
-                    )
-                ).mean(dim="wl_sensor")
-                BRDF_sunglint[iy:yc, ix:xc] = BRDF_sunglint_
-                sunglint_app_ = Tdir_full_ * sunglint_eps
-
-                Rdir = sunglint_app_ * BRDF_sunglint_
-                Rrs[:, iy:yc, ix:xc] = (Rcorr - Rdir) / np.pi
-        return Rrs, BRDF_sunglint
+        BRDF_sunglint= np.asarray(BRDF_sunglint.transpose("y","x"))
+        
+        
+        return BRDF_sunglint
+    
+    def fullres_Tot_correction(
+        self, raster_name="raster", variable="Rtoa",  chunk=13
+    ):
+        raster = self.__dict__[raster_name]
+        Rcorr = raster[variable]
+        Ttot = self.aero_retrieval.compute_atmo_bidir_transmittance()
+        Ttot_int = (
+            interpolate_xr(Ttot, xdim = "xc", ydim="yc", additional_dims=("wl_sensor",), scale=20, chunk_size=chunk)
+            .rename({"xc":"x", "yc": "y"})
+        )
+        Rrs = Rcorr / np.pi
+        Rrs = Rrs / Ttot_int
+        
+        cluster_kwargs = {
+            "n_workers": 1,
+            "threads_per_worker":1,
+        }
+        t = time.time()
+        with LocalCluster(**cluster_kwargs) as cluster:
+            with Client(cluster) as client:
+                Rrs = Rrs.compute()
+        Rrs  = np.asarray(Rrs.transpose("wl_sensor", "y","x"))
+        print("dt :", time.time()-t) # TODO (antoine): logger
+        return Rrs
 
     # --- Export function -----
     # produce ancilliary data

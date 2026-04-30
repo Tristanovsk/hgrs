@@ -40,6 +40,7 @@ setup(
         "omnicloudmask",
         "scikit-learn",
         "dask",
+        "distributed"
     ],
     entry_points={
         "console_scripts": [

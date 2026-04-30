@@ -213,12 +213,12 @@ class Process:
         # Glint
         # ------------------------------------------
 
-        Rrs, BRDF_sunglint = prod.fullres_aeroglint_correction()
+        BRDF_sunglint = prod.fullres_aeroglint_correction()
 
         # ------------------------------------------
         # bidirectional transmitance (aerosols)
         # ------------------------------------------
-
+        Rrs = prod.fullres_Tot_correction()
         l2_prod = xr.Dataset(
             dict(
                 Rrs=(["wl_sensor", "y", "x"], Rrs),
@@ -231,12 +231,6 @@ class Process:
                 fwhm=prod.raster.fwhm,
             ),
         )
-
-        # finally correct for down and upward transmittances (aerosols)
-
-        Ttot = prod.compute_atmo_bidir_transmittance()
-
-        l2_prod["Rrs"] = l2_prod.Rrs / Ttot
 
         # -----------------------------
         # construct output image
@@ -255,6 +249,8 @@ class Process:
         prod.complete_L2A_attributes(l2_prod)
         self.l2_prod = l2_prod
         self.successful = True
+        logging.info("Atmospheric correction successfull!")
+
         return
 
     def write_output(self, ofile):

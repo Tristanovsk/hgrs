@@ -140,8 +140,9 @@ class Solver:
             )
         ]
 
-        p = Pool()
-        res = p.map(chunk_process, window_idxs)
+        with Pool() as p:
+            res = p.map(chunk_process, window_idxs)
+        
         result = np.ctypeslib.as_array(shared_array)
         return result
 
@@ -495,8 +496,11 @@ class Aerosol(Solver):
         Tdirs = self.transmittance_dir(aots, self.air_mass_mean, rot=self.rot)
         return aots, Rdiffs, Tdirs
 
-    def compute_atmo_bidir_transmittance(self):
-        aot_ref = float(self.aero_img.aot_ref.mean())
+    def compute_atmo_bidir_transmittance(self, use_mean = False):
+        if use_mean:
+            aot_ref = float(self.aero_img.aot_ref.mean())
+        else:
+            aot_ref = self.aero_img.aot_ref
         Ttot_Ed_opacmodel = self.Ttot_Ed.sel(model=self.aerosol_model)
         sensor_mod = self.sensor_description.sensor_mod_lr
         Ttot_Ed_ = Ttot_Ed_opacmodel.interp(sza=self.sza_mean, method="cubic").interp(
