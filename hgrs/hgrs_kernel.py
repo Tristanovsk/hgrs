@@ -51,7 +51,7 @@ class Product():
         self.wl_sunglint = slice(2150, 2250)
         # self.wl_atmo = slice(950, 2450)
         self.wl_atmo = [1000, 1050, 1075, 1100, 1200, 1300, 1600, 1650, 1700, 2150, 2200, 2250]
-        self.wl_non_neg = [419.457, 490, 560, 650, 750, 800, 865, 1650, 2250]
+        self.wl_non_neg = [430, 490, 560, 650, 750, 800, 865, 1020]
         self.wl_to_remove = [(935, 967), (1105, 1170), (1320, 1490), (1778, 2033), (2465, 2550)]
         self.wl_green = slice(540, 570)
         self.wl_nir = slice(850, 882)
@@ -88,7 +88,7 @@ class Product():
         self.tno2c = 3e-6
         self.tch4c = 1e-2
         self.psl = 1013
-        self.coef_abs_scat = 1.
+        self.coef_abs_scat = .35
 
         self.altitude = 0
 
@@ -800,9 +800,13 @@ class Aerosol(Solver):
                                        aerosol_model=self.aerosol_model)
                                    )
 
-    def smoothing(self, windows=np.array([3, 3]), mask=np.ones((3, 3))):
+    def smoothing(self,
+                  weights,
+                  windows=np.array([3, 3]),
+                  mask=np.ones((3, 3))
+                  ):
 
-        weights = (1 / self.aero_img['aot_ref_std'] ** 2).__deepcopy__().to_numpy().astype(float)
+        #weights = (1 / self.aero_img['aot_ref_std'] ** 2).__deepcopy__().to_numpy().astype(float)
         param = self.aero_img['aot_ref'].__deepcopy__().to_numpy().astype(float)
         aot_ref_smoothed = self.filter2d(param, weights, windows)
         res = ndimage.generic_filter(aot_ref_smoothed, function=self.conv_mapping, footprint=mask, mode='nearest')
@@ -810,14 +814,21 @@ class Aerosol(Solver):
         self.aero_img['aot_ref_smoothed'] = xr.DataArray(res, coords=dict(y=self.aero_img.y, x=self.aero_img.x))
 
     def get_aot_full_resolution(self):
+        # TODO change fill_value (extrapolate is not safe) with median of retrieval, for instance
         self.aot_ref_full = \
             self.aero_img['aot_ref_smoothed'].interp(x=self.xfull, y=self.yfull,
                                                      method='linear', kwargs={"fill_value": "extrapolate"})
 
-    def get_atmo_parameters(self, wl):
+    def get_atmo_parameters(self,
+                            prod):
+
+
+        wl = prod.coarse_masked_raster.wl
+        weights = prod.coarse_masked_raster['water_pixel_number'].__deepcopy__().to_numpy().astype(float)
+
         # get LUT for desired wavelengths
         self.prepare_lut(wl)
-        self.smoothing()
+        self.smoothing(weights)
         self.get_aot_full_resolution()
 
         # construct aot raster
