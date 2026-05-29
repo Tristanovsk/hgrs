@@ -29,6 +29,9 @@ HGRSDATA = config['path']['data_root']
 TOALUT = config['path']['toa_lut']
 TRANSLUT = config['path']['trans_lut']
 
+LUT_FILE = opj(HGRSDATA, TOALUT)
+TRANS_LUT_FILE = opj(HGRSDATA, TRANSLUT)
+
 
 class Process():
     def __init__(self):
@@ -53,9 +56,9 @@ class Process():
         # action = 'load L1C image plus angle rasters'
         # pbar = tqdm(total=len(action),
         #             desc=action + f": {img_path} ")
-        driver = hgrs.Driver('enmap')
-        l1_prod = driver.read_l1c_enmap(img_path, reflectance_unit=True)
         if isinstance(img_path, str):
+            logging.info('Opening EnMAP image')
+
             try:
                 driver = hgrs.Driver('enmap')
                 l1_prod = driver.read_l1c_enmap(img_path, reflectance_unit=True)
@@ -63,17 +66,18 @@ class Process():
                 logging.info('input file format not recognized, stop')
                 return
         else:
+            logging.info('Opening PRISMA image')
+            print(img_path)
             try:
-                driver  = hgrs.Driver('prisma')
-                l1_prod = driver.read_L1C_data(img_path[0], reflectance_unit=True, drop_vars=True)
-                l2c_prod = driver.read_L2C_data(img_path[1])
+                driver = hgrs.Driver('prisma')
+
+                l1_prod = driver.read_prisma(img_path[0],
+                                             img_path[1],
+                                             reflectance_unit=True,
+                                             drop_vars=True)
             except:
                 logging.info('input file format not recognized, stop')
                 return
-
-            for param in ['sza', 'vza', 'raa']:
-                l1_prod[param] = l2c_prod[param]
-            del l2c_prod
 
         # get L1C object
         self.l1_prod = l1_prod
@@ -81,7 +85,7 @@ class Process():
         date = l1_prod.time
         raster = l1_prod.sza.rio.reproject(4326)
         clon, clat = float(raster.x.mean()), float(raster.y.mean())
-        #pbar.refresh()
+        # pbar.refresh()
 
         # -----------------------------------------
         # Create hGRS object
@@ -128,7 +132,7 @@ class Process():
         lut_aod = prod.aero_lut.aot.sel(aot_ref=1).interp(wl=cams_aod.wl)
         idx = np.abs((cams_aod / cams.aod550) - lut_aod).sum('wl').argmin()
         opac_model = prod.aero_lut.model.values[idx]
-        logging.info('OPAC model: '+opac_model)
+        logging.info('OPAC model: ' + opac_model)
 
         # set gases and pressure
         prod.pressure = float(cams.sp) * 1e-2
@@ -147,7 +151,7 @@ class Process():
         nir_index = 940
         rgnir = prod.raster.Rtoa.sel(wl=[red_index, green_index, nir_index], method='nearest').fillna(0)  # .values
         omnimask = prod.get_omnicloudmask(rgnir)
-        prod.raster['Rtoa'] = prod.raster['Rtoa'].where(omnimask==0)
+        prod.raster['Rtoa'] = prod.raster['Rtoa'].where(omnimask == 0)
 
         logging.info('Apply water masking')
         prod.apply_water_masks()
@@ -183,7 +187,7 @@ class Process():
         logging.info('aerosol retrieval')
 
         variable = 'Rtoa'
-        #prod.coarse_masked_raster = prod.remove_wl_dataset(
+        # prod.coarse_masked_raster = prod.remove_wl_dataset(
         #    prod.coarse_masked_raster, prod.wl_to_remove, variable=variable)
         prod.coarse_masked_raster = prod.remove_wl_dataset(
             prod.coarse_masked_raster, prod.wl_to_remove, variable=variable)
@@ -196,7 +200,7 @@ class Process():
         aod550_mean = cams.aod550.mean().values
 
         aod550_std = cams.aod550.std().values
-        aod550_std = np.max([aod550_std, 0.2*aod550_mean + 0.05])
+        aod550_std = np.max([aod550_std, 0.2 * aod550_mean + 0.05])
         aot550_min = 0.002  # np.max([aod550_mean - 2*aod550_std,0.001])
         aero_retrieval = hgrs.Aerosol(prod,
                                       aerosol_model=opac_model,
@@ -205,7 +209,8 @@ class Process():
                                                      aod550_mean + 2 * aod550_std])
         aero_retrieval.solve()
         aero_retrieval.prepare_lut(prod.coarse_masked_raster.wl)
-        aero_retrieval.smoothing()
+        weights = prod.coarse_masked_raster['water_pixel_number'].__deepcopy__().to_numpy().astype(float)
+        aero_retrieval.smoothing(weights)
 
         # self.aero_img['aot_ref_smoothed']=self.aero_img['aot_ref_smoothed']*0.5
         # construct aot raster
@@ -220,6 +225,7 @@ class Process():
         # if rounded aot_ref has unique value
         if len(aot_refs) == 1:
             aot_refs = np.concatenate([aot_refs, 1.2 * aot_refs])
+        print(aot_refs)
         aots = aero_retrieval.aot_lut.interp(aot_ref=aot_refs, method='linear')
         aots = aots.interp(aot_ref=aot_ref_vals, method='nearest')
 
@@ -227,7 +233,7 @@ class Process():
         aots.attrs['description'] = 'spectral aerosol optical thickness'
 
         # construct raster for diffuse atmospheric reflectance
-        #TODO check quadratic interpolation (should be much better)
+        # TODO check quadratic interpolation (should be much better)
         Rdiffs = aero_retrieval.Rtoa_lut.interp(aot_ref=aot_refs, method='linear')
         Rdiffs = Rdiffs.interp(aot_ref=aot_ref_vals, method='nearest')
         Rdiffs.name = 'Rtoa_diff'
@@ -238,7 +244,7 @@ class Process():
         Tdirs.name = 'Tdir'
         Tdirs.attrs['description'] = 'direct transmittance due to rayleigh and aerosol for total air mass'
 
-        aero_retrieval.get_atmo_parameters(prod.coarse_masked_raster.wl)
+        aero_retrieval.get_atmo_parameters(prod)
         self.aero_retrieval = aero_retrieval
 
         # ------------------------------------------
@@ -311,7 +317,7 @@ class Process():
 
         # finally correct for down and upward transmittances
         # TODO compute pixel wise
-        Ttot_Ed = xr.open_dataset('/data/vrtc/xlut/transmittance_lut_opac_wind_v3.nc').isel(wind=1)
+        Ttot_Ed = xr.open_dataset(TRANS_LUT_FILE).isel(wind=1)
         Ttot_Ed['wl'] = Ttot_Ed['wl'] * 1e3
 
         aot_ref = float(aero_retrieval.aero_img.aot_ref.mean())
@@ -421,7 +427,8 @@ class Process():
         l2_prod.attrs['description'] = 'PRISMA L2A-hGRS cube data'
         l2_prod.attrs['DEM'] = 'not available'
         l2_prod.attrs['aerosol_model'] = aero_retrieval.aerosol_model
-        keys = ['wl_water_vapor', 'wl_sunglint', 'wl_atmo', 'wl_to_remove', 'wl_green', 'wl_nir', 'wl_1600', 'wl_rgb',
+        keys = ['wl_water_vapor', 'wl_sunglint', 'wl_atmo', 'wl_to_remove', 'wl_non_neg', 'wl_green', 'wl_nir',
+                'wl_1600', 'wl_rgb',
                 'xcoarsen', 'ycoarsen', 'Npix_per_megapix', 'block_size', 'pixel_percentage', 'pixel_threshold',
                 'ang_resol', 'abs_gas_file', 'lut_file', 'water_vapor_transmittance_file',
                 'sunglint_threshold',
@@ -447,7 +454,7 @@ class Process():
         encoding = {
             'Rrs': {'dtype': 'int16', 'scale_factor': 0.00001, 'add_offset': .2, '_FillValue': -32768, "zlib": True,
                     "complevel": complevel},
-            #'aot_ref_full': {'dtype': 'int16', 'scale_factor': 0.001, '_FillValue': -9999, "zlib": True,
+            # 'aot_ref_full': {'dtype': 'int16', 'scale_factor': 0.001, '_FillValue': -9999, "zlib": True,
             #                 "complevel": complevel},
             'aot_ref': {'dtype': 'int16', 'scale_factor': 0.001, '_FillValue': -9999, "zlib": True,
                         "complevel": complevel},
@@ -459,7 +466,7 @@ class Process():
                       "complevel": complevel},
             'brdfg_std': {'dtype': 'int16', 'scale_factor': 0.00001, 'add_offset': .2, '_FillValue': -32768,
                           "zlib": True, "complevel": complevel},
-            #'tcwv_full': {'dtype': 'int16', 'scale_factor': 0.01, '_FillValue': -9999, "zlib": True,
+            # 'tcwv_full': {'dtype': 'int16', 'scale_factor': 0.01, '_FillValue': -9999, "zlib": True,
             #              "complevel": complevel},
             'tcwv': {'dtype': 'int16', 'scale_factor': 0.01, '_FillValue': -9999, "zlib": True, "complevel": complevel},
             'tcwv_std': {'dtype': 'int16', 'scale_factor': 0.01, '_FillValue': -9999, "zlib": True,

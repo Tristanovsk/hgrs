@@ -43,7 +43,7 @@ from .hgrs_process import Process
 def main():
     args = docopt(__doc__, version=__package__ + '_' + __version__)
     print(args)
-
+    version = 'V' + __version__
     l1_path = args['<l1_path>']
 
     cams_file = args['--cams_file']
@@ -59,7 +59,7 @@ def main():
     outfile = args['-o']
     if outfile == None:
         outfile = basename.replace('L1_STD_OFFL', lev)
-        outfile = outfile.replace('.he5', '.nc').rstrip('/')
+        outfile = outfile.replace('.he5', version+'.nc').rstrip('/')
 
     odir = args['--odir']
     if odir == './':
