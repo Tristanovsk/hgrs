@@ -17,6 +17,8 @@ import logging
 
 import hgrs
 from hgrs.hgrs_kernel import LUTTables, CAMSProduct
+import time
+from hgrs.config import get_config
 
 
 class Process:
@@ -119,19 +121,15 @@ class Process:
         # -----------------------------------------
         auxdata = prod.auxdata
         auxdata
-        # TODO (tristan) put omnimask settins (bands) in config.yml
         logging.info("Apply omnicloudmask")
-        red_index = 670
-        green_index = 550
-        nir_index = 940
-        rgnir = (
-            prod.raster.Rtoa.sel(
-                wl_sensor=[red_index, green_index, nir_index], method="nearest"
-            )
-            .fillna(0)
-            .transpose("wl_sensor", "y", "x")
-        )  # .values
-        omnimask = prod.get_omnicloudmask(rgnir)
+        config = get_config()
+        red_index = config["cloud_mask"]["red_index"]
+        green_index = config["cloud_mask"]["green_index"]
+        nir_index = config["cloud_mask"]["nir_index"]
+
+        omnimask = prod.get_omnicloudmask(
+            prod.raster.Rtoa, red_index, green_index, nir_index
+        )
         # fill na the clouds & non water pixels
         prod.raster["Rtoa"] = prod.raster["Rtoa"].where(omnimask == 0)
 
@@ -144,7 +142,7 @@ class Process:
         logging.info("Construct coarse resolution raster")
         raster_name_coarse = "coarse_masked_raster"
         variable = "Rtoa"
-        prod.get_coarse_masked_raster()
+        prod.get_coarse_masked_raster(raster_name_coarse=raster_name_coarse)
         # prod.plot_water_pix_number()
 
         # -----------------------------------------
@@ -160,13 +158,18 @@ class Process:
         # water vapor retrieval and correction
         # ------------------------------------------
         logging.info("water vapor retrieval and correction")
+        t = time.time()
 
         prod.find_coarse_water_vapor(raster_name=raster_name_coarse, variable=variable)
+        t2 = time.time()
+        logging.info(f"dt: {t2-t}")
+
+        logging.info(f"Correcting wv on coarse res. + drop band with significant abs.")
+
         prod.coarse_water_vapor_correction(
             raster_name=raster_name_coarse, variable=variable
         )
         # data
-        logging.info(f"mask bands where gaseous abs. is too strong")
         prod.drop_band_predefined(
             raster_name_coarse, variable=variable
         )  # state coarse (bands)
@@ -179,13 +182,12 @@ class Process:
         # aerosol retrieval
         # ------------------------------------------
         logging.info("aerosol retrieval")
-
+        t = time.time()
         prod.find_coarse_aeroglint()
-
-        aero_retrieval = prod.aero_retrieval
+        t2 = time.time()
+        logging.info(f"dt: {t2-t}")
 
         prod.compute_atmo_img_smooth(prod.coarse_masked_raster.wl_sensor)
-        self.aero_retrieval = aero_retrieval
 
         # ------------------------------------------
         # full resolution processing
@@ -240,7 +242,7 @@ class Process:
         # -----------------------------
         # data
         wv = prod.wv_retrieval.water_vapor  # half shift
-        aero = aero_retrieval.aero_img
+        aero = prod.aero_retrieval.aero_img
         water_pixel_prop = prod.derive_water_pixel_prop()
         # geom = prod.raster[['lon', 'lat']].drop_vars('tcwv')
         # Rrs_ = Rrs_l2.reset_coords().drop_vars(['model', 'z']).rename({'tcwv': 'tcwv_full', 'aot_ref': 'aot_ref_full'}).set_coords(['time','spatial_ref'])

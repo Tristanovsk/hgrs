@@ -23,76 +23,9 @@ from hgrs.utils import interpolate_xr
 import time
 from dask.distributed import Client, LocalCluster
 from dask import compute
+import logging
+
 opj = os.path.join
-
-
-class CAMSProduct:
-
-    def __init__(self, path, date, clat, clon, aero_lut):
-        """
-        Initialise the CAMS data:
-
-        Attributes:
-            pressure (float): from CAMS
-            to3c (float): from CAMS
-            tno2c (float): from CAMS
-            tch4c (float): from CAMS
-            aod550:
-            aerosol_model: closest opac model (using in situ aod at different wl)
-
-        """
-
-        # lazy loading
-        cams = xr.open_dataset(
-            path, decode_cf=False, chunks={"time": 1, "x": 500, "y": 500}
-        )
-
-        cams["forecast_period"].attrs.pop("dtype", None)
-        cams = xr.decode_cf(cams)
-
-        # fix for new ADS format (sept 2024)
-        if ("forecast_period" in cams.dims) & ("forecast_reference_time" in cams.dims):
-            cams = (
-                cams.stack(time_buffer=["forecast_period", "forecast_reference_time"])
-                .swap_dims({"time_buffer": "valid_time"})
-                .sortby("valid_time")
-                .rename({"valid_time": "time"})
-                .drop_vars(["time_buffer"])
-            )
-
-        # slicing
-        cams = cams.sel(time=date, method="nearest")
-        cams = cams.sel(latitude=clat, longitude=clon, method="nearest")
-
-        # select OPAC aerosol model
-        # aod = cams[['aod355', 'aod380', 'aod400', 'aod440', 'aod469', 'aod500', 'aod550', 'aod645', 'aod670',
-        #            'aod800', 'aod865', 'aod1020', 'aod1064', 'aod1240', 'aod1640', 'aod2130']].to_pandas()
-        # aod.index = aod.index.str.replace('aod', '').astype(int)
-        # cams_aod = aod.to_xarray().rename({'index': 'wl'})
-        cams_wls = [469, 550, 670, 865, 1240]
-        param_aod = []
-        for wl in cams_wls:
-            wl_ = str(wl)
-            param_aod.append("aod" + wl_)
-
-        cams_aod = cams[param_aod].to_array(dim="wl")
-
-        wl_cams = cams_aod.wl.str.replace("aod", "").astype(float)
-        cams_aod = cams_aod.assign_coords(wl=wl_cams)
-
-        # new LUT:
-        lut_aod = aero_lut.aot.sel(aot_ref=1).interp(wl=cams_aod.wl)
-        idx = np.abs((cams_aod / cams.aod550) - lut_aod).sum("wl").argmin()
-        aerosol_model = aero_lut.model.values[idx]
-
-        # set gases and pressure
-        self.pressure = float(cams.sp) * 1e-2
-
-        self.to3c = float(cams.gtco3)
-        self.tno2c = float(cams.tcno2)
-        self.tch4c = float(cams.tc_ch4)
-        self.aod550 = cams.aod550
-        self.aerosol_model = aerosol_model
 
 
 @dataclass
@@ -196,8 +129,8 @@ class Product:
 
         aod550_mean = cams.aod550.mean().values
         # TODO (Tristan) double check regularization from CAMS AOT values
-        # TODO: (Antoine): the retreived cams.aod550 is a single values, and not mean over studied area. Can this impact bounds?
-
+        # TODO: (Antoine): the retreived cams.aod550 is a single values, and not mean over studied area
+        # STD -> always 0
         # initialisation of the aerosol retreival
         aod550_std = cams.aod550.std().values
         aod550_std = np.max([aod550_std, 0.2 * aod550_mean + 0.05])
@@ -222,7 +155,8 @@ class Product:
         nir = self.raster.Rtoa.sel(wl_sensor=self.water_threshold_params.wl_nir).mean(
             dim="wl_sensor"
         )
-        self.ndwi = (green - nir) / (green + nir)
+        ndwi = (green - nir) / (green + nir)
+        return ndwi
 
     def get_green_swir_index(self):
         green = self.raster.Rtoa.sel(
@@ -231,30 +165,28 @@ class Product:
         b1600 = self.raster.Rtoa.sel(
             wl_sensor=self.water_threshold_params.wl_1600
         ).mean(dim="wl_sensor")
-        self.green_swir_index = (green - b1600) / (green + b1600)
+        green_swir_index = (green - b1600) / (green + b1600)
+        return green_swir_index
 
     def get_b2200(self):
-        self.b2200 = self.raster.Rtoa.sel(wl_sensor=self.wl_sunglint).mean(
-            dim="wl_sensor"
-        )
+        b2200 = self.raster.Rtoa.sel(wl_sensor=self.wl_sunglint).mean(dim="wl_sensor")
+        return b2200
 
     def apply_water_masks(self):
-        self.get_ndwi()
-        self.get_green_swir_index()
-        self.get_b2200()
-        self.raster["Rtoa"] = (
-            self.raster.Rtoa.where(
-                self.ndwi > self.water_threshold_params.ndwi_threshold
-            )
-            .where(self.b2200 < self.water_threshold_params.sunglint_threshold)
-            .where(
-                self.green_swir_index
+        ndwi = self.get_ndwi()
+        green_swir_index = self.get_green_swir_index()
+        b2200 = self.get_b2200()
+        mask = (
+            (ndwi > self.water_threshold_params.ndwi_threshold)
+            & (b2200 < self.water_threshold_params.sunglint_threshold)
+            & (
+                green_swir_index
                 > self.water_threshold_params.green_swir_index_threshold
             )
-            .load()
         )
+        self.raster["Rtoa"] = self.raster.Rtoa.where(mask)
 
-    def get_omnicloudmask(self, rgnir):
+    def get_omnicloudmask(self, Rtoa, red_index, green_index, nir_index):
         """
         Apply OmniCloudMAsk for clouds and cloud shadows masking
 
@@ -272,10 +204,13 @@ class Product:
          Achieving state-of-the-art cloud and cloud shadow identification with OmniCloudMask.
          Remote Sensing of Environment, 322, 114694. https://doi.org/10.1016/J.RSE.2025.114694
 
-        :param rgnir: raster xarray object with the red, green and nir bands
-        :return omnimask: raster of the retrieved mask
-        """
 
+        """
+        rgnir = (
+            Rtoa.sel(wl_sensor=[red_index, green_index, nir_index], method="nearest")
+            .fillna(0)
+            .transpose("wl_sensor", "y", "x")
+        )  # .values
         pred = predict_from_array(rgnir.fillna(0).values)
         omnimask = xr.DataArray(
             pred[0],
@@ -652,8 +587,6 @@ class Algo(Product):
         )
         self.atmo_img.attrs["aerosol_model"] = self.aerosol_model
 
-
-
     # -------- Full resolution ------------
     def fullres_water_vapor_correction(
         self, raster_name="raster", variable="Rtoa", raster_wv="Twv_raster", chunk=13
@@ -663,29 +596,32 @@ class Algo(Product):
         # results = np.full((height, width), 0, dtype=np.float32)
         twv_coarse = self.__dict__[raster_wv]
         variable = "Rtoa"
-        twv_coarse_int = (
-            interpolate_xr(twv_coarse, xdim = "xc", ydim="yc", additional_dims=("wl_sensor",), scale=20, chunk_size=chunk)
-            .rename({"xc":"x", "yc": "y"})
-        )
-        R_wc = (raster[variable] / twv_coarse_int)
+        twv_coarse_int = interpolate_xr(
+            twv_coarse,
+            xdim="xc",
+            ydim="yc",
+            additional_dims=("wl_sensor",),
+            scale=20,
+            chunk_size=chunk,
+        ).rename({"xc": "x", "yc": "y"})
+        R_wc = raster[variable] / twv_coarse_int
         cluster_kwargs = {
             "n_workers": 1,
-            "threads_per_worker":1,
+            "threads_per_worker": 1,
         }
         t = time.time()
         with LocalCluster(**cluster_kwargs) as cluster:
             with Client(cluster) as client:
-                
-                raster[variable] = R_wc.compute()
-        print("dt :", time.time()-t) # TODO (antoine): logger
-        pass
 
+                raster[variable] = R_wc.compute()
+
+        logging.info(f"time for transmittance (water) correction: {time.time()-t}")
+        pass
 
     def fullres_aeroglint_correction(
         self, raster_name="raster", variable_hyp="Rtoa", chunk=13
     ):
         raster = self.__dict__[raster_name]
-
 
         # retreived params
         Rdiff_full = (
@@ -695,14 +631,23 @@ class Algo(Product):
         sunglint_eps = self.aero_retrieval.sunglint_eps
 
         wl_sunglint = self.wl_sunglint
-        Rdiff_full_int = (
-            interpolate_xr(Rdiff_full, xdim = "xc", ydim="yc", additional_dims=("wl_sensor",), scale=20, chunk_size=chunk)
-            .rename({"xc":"x", "yc": "y"})
-        )
-        Tdir_full_int = (
-            interpolate_xr(Tdir_full, xdim = "xc", ydim="yc", additional_dims=("wl_sensor", ), scale=20, chunk_size=chunk)
-            .rename({"xc":"x", "yc": "y"})
-        )
+        Rdiff_full_int = interpolate_xr(
+            Rdiff_full,
+            xdim="xc",
+            ydim="yc",
+            additional_dims=("wl_sensor",),
+            scale=20,
+            chunk_size=chunk,
+        ).rename({"xc": "x", "yc": "y"})
+        Tdir_full_int = interpolate_xr(
+            Tdir_full,
+            xdim="xc",
+            ydim="yc",
+            additional_dims=("wl_sensor",),
+            scale=20,
+            chunk_size=chunk,
+        ).rename({"xc": "x", "yc": "y"})
+
         Rcorr = raster[variable_hyp]
         BRDF_sunglint = (
             Rcorr.sel(wl_sensor=wl_sunglint)
@@ -711,51 +656,51 @@ class Algo(Product):
                 * sunglint_eps.sel(wl_sensor=wl_sunglint)
             )
         ).mean(dim="wl_sensor")
+        # to_plot = Tdir_full_int[0].values
+        # to_plot = to_plot[]
         Rdir = Tdir_full_int * sunglint_eps * BRDF_sunglint
-        Rcorr_g = (Rcorr - Rdiff_full_int - Rdir) 
-         
+        Rcorr_g = Rcorr - Rdiff_full_int - Rdir
+
         cluster_kwargs = {
             "n_workers": 1,
-            "threads_per_worker":1,
+            "threads_per_worker": 1,
         }
         t = time.time()
         with LocalCluster(**cluster_kwargs) as cluster:
             with Client(cluster) as client:
-                BRDF_sunglint, Rcorr_g = compute(
-                    BRDF_sunglint,
-                    Rcorr_g
-                )
+                BRDF_sunglint, Rcorr_g = compute(BRDF_sunglint, Rcorr_g)
         raster[variable_hyp] = Rcorr_g
-        print("dt :", time.time()-t) # TODO (antoine): logger
+        logging.info(f"time for full resolution glint correction dt : {time.time()-t}")
 
-        BRDF_sunglint= np.asarray(BRDF_sunglint.transpose("y","x"))
-        
-        
+        BRDF_sunglint = np.asarray(BRDF_sunglint.transpose("y", "x"))
+
         return BRDF_sunglint
-    
-    def fullres_Tot_correction(
-        self, raster_name="raster", variable="Rtoa",  chunk=13
-    ):
+
+    def fullres_Tot_correction(self, raster_name="raster", variable="Rtoa", chunk=13):
         raster = self.__dict__[raster_name]
         Rcorr = raster[variable]
         Ttot = self.aero_retrieval.compute_atmo_bidir_transmittance()
-        Ttot_int = (
-            interpolate_xr(Ttot, xdim = "xc", ydim="yc", additional_dims=("wl_sensor",), scale=20, chunk_size=chunk)
-            .rename({"xc":"x", "yc": "y"})
-        )
+
+        Ttot_int = interpolate_xr(
+            Ttot,
+            xdim="xc",
+            ydim="yc",
+            additional_dims=("wl_sensor",),
+            scale=20,
+            chunk_size=chunk,
+        ).rename({"xc": "x", "yc": "y"})
         Rrs = Rcorr / np.pi
         Rrs = Rrs / Ttot_int
-        
         cluster_kwargs = {
             "n_workers": 1,
-            "threads_per_worker":1,
+            "threads_per_worker": 1,
         }
         t = time.time()
         with LocalCluster(**cluster_kwargs) as cluster:
             with Client(cluster) as client:
                 Rrs = Rrs.compute()
-        Rrs  = np.asarray(Rrs.transpose("wl_sensor", "y","x"))
-        print("dt :", time.time()-t) # TODO (antoine): logger
+        Rrs = np.asarray(Rrs.transpose("wl_sensor", "y", "x"))
+        logging.info(f"time for transmittance (aerosol) correction: {time.time()-t}")
         return Rrs
 
     # --- Export function -----

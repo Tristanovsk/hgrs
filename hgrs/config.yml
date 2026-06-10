@@ -3,6 +3,10 @@ path:
   toa_lut: 'toa_lut_opac_wind_up_v3.nc'
   trans_lut: 'transmittance_lut_opac_wind_v3.nc'
   cams: '/data/cams'
+cloud_mask:
+  red_index: 670
+  green_index: 550
+  nir_index: 940
 
 settings:
   aerosol_combination: [0, 0.5, 0, 0.5, 0.,0.]

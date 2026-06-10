@@ -1,14 +1,12 @@
 import os
-import importlib_resources
 import yaml
 import xarray as xr
 import numpy as np
+from hgrs.config import get_config
 
 opj = os.path.join
 
-configfile = importlib_resources.files(__package__).joinpath("config.yml")
-with open(configfile, "r") as file:
-    config = yaml.safe_load(file)
+config = get_config()
 
 HGRSDATA = config["path"]["data_root"]
 TOALUT = config["path"]["toa_lut"]
