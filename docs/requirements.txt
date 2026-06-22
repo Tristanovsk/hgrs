@@ -2,8 +2,8 @@
 
 # Doc
 ipython
-sphinx <=7.2.6
-sphinx-book-theme<=1.1.2
+sphinx #<=7.2.6
+sphinx-book-theme #<=1.1.2
 sphinx-copybutton
 myst-nb
 myst-parser
