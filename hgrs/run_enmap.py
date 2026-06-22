@@ -58,8 +58,8 @@ def main():
 
     outfile = args['-o']
     if outfile == None:
-        outfile = basename.replace('L1_STD_OFFL', lev)
-        outfile = outfile.replace('.he5', version+'.nc').rstrip('/')
+        outfile = basename.replace('L1C', lev)
+        outfile = outfile+ '_'+version+'.nc'
 
     odir = args['--odir']
     if odir == './':
@@ -68,7 +68,7 @@ def main():
     if not os.path.exists(odir):
         os.makedirs(odir)
 
-    outfile = os.path.join(odir, outfile)+'.nc'
+    outfile = os.path.join(odir, outfile)
 
     if os.path.exists(outfile) & noclobber:
         print('File ' + outfile + ' already processed; skip!')

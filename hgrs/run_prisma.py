@@ -68,7 +68,7 @@ def main():
     outfile = args['-o']
     if outfile == None:
         outfile = basename.replace('L1_STD_OFFL', lev)
-        outfile = outfile.replace('.he5', version+'.nc').rstrip('/')
+        outfile = outfile.replace('.he5', '_'+version+'.nc').rstrip('/')
 
     odir = args['--odir']
     if odir == './':
