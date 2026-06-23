@@ -3,5 +3,32 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-
+  - gdal
+  - xarray
+  - rioxarray
+  - dask
+  - pyproj
+  - xesmf
+  - pip>=20.1  # pip is needed as dependency
+  - pip:
+    - geopandas
+    - jupyter
+    - cartopy
+    - importlib_resources
+    - xmltodict
+    - docopt
+    - netCDF4
+    - h5py
+    - numba
+    - numpy
+    - scipy
+    - omnicloudmask
+    - pandas>=2.0.3
+    - holoviews
+    - datashader
+    - bokeh
+    - matplotlib
+    - importlib_resources
+    - datetime
+    - -r requirements.txt
 

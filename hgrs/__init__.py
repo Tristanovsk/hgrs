@@ -9,8 +9,9 @@ v1.0.6: add reprojection feature
 v1.0.7: 2025-11-07 correct bug for Earth-Sun distance, option to remove bad EnMAP bands, refactoring
 v1.1.0: new processor for aerosol optical thickness based on non-negativity of retrieved reflectance
 v1.1.1: clean up and check which function gaussian, supergaussian is the most suited for spectral integration
+v1.1.2: set windows at [1,1] for filter2D (smoothing), need to improve smoothing
 '''
-__version__ = '1.1.1'
+__version__ = '1.1.2'
 
 from .utils import Reproj, Misc
 from .auxdata import AuxData, SolarIrradiance

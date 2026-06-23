@@ -802,7 +802,7 @@ class Aerosol(Solver):
 
     def smoothing(self,
                   weights,
-                  windows=np.array([3, 3]),
+                  windows=np.array([1, 1]),
                   mask=np.ones((3, 3))
                   ):
 

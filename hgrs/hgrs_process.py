@@ -217,7 +217,9 @@ class Process():
         # with full res
         # aot_ref_vals = self.aot_ref_full.round(3)
         # with coarse res
+
         aot_ref_vals = aero_retrieval.aero_img['aot_ref_smoothed'].round(3)
+
         aot_refs = np.unique(aot_ref_vals)
         aot_refs = aot_refs[~np.isnan(aot_refs)]
         # TODO update LUT for aot< 0.001
