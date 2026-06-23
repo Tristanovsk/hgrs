@@ -20,6 +20,16 @@ local copy:
 pip install . 
 ```
 
+Then, download the look-up table (LUT) files and copy them in a specific folder (get the path of this folder). 
+
+[download lut](https://drive.google.com/drive/folders/1r3unjh8UYTvO87nbppqivVq_cwbVxhLk?usp=sharing)
+
+Write the path of the LUT folder in `hgrs/config.yml`, example:
+```commandline
+path:
+  data_root: '/DATA/git/satellite_app/hgrs/big_lut'
+```
+
 Optional dependency, if you want to use the reprojection feature for PRISMA please install xemsf:
 
 ```commandline
