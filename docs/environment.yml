@@ -18,12 +18,21 @@ dependencies:
     - xmltodict
     - docopt
     - netCDF4
+    - h5py
     - numba
     - numpy
+    - scipy
+    - multiprocessing
+    - omnicloudmask
     - pandas>=2.0.3
-    - eoreader
-    - pystac
     - holoviews
     - datashader
     - bokeh
+    - matplotlib
+    - pkg_resources
+    - importlib_resources
+    - yaml
+    - xml
+    - datetime
+    - logging
     - -r requirements.txt
