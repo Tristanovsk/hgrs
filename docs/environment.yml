@@ -6,7 +6,9 @@ dependencies:
   - gdal
   - xarray
   - rioxarray
+  - dask
   - pyproj
+  - xesmf
   - pip>=20.1  # pip is needed as dependency
   - pip:
     - geopandas
