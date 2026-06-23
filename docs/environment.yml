@@ -28,7 +28,6 @@ dependencies:
     - datashader
     - bokeh
     - matplotlib
-    - pkg_resources
     - importlib_resources
     - yaml
     - xml
