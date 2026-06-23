@@ -22,7 +22,6 @@ dependencies:
     - numba
     - numpy
     - scipy
-    - multiprocessing
     - omnicloudmask
     - pandas>=2.0.3
     - holoviews
