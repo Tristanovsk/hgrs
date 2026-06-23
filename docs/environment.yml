@@ -29,8 +29,5 @@ dependencies:
     - bokeh
     - matplotlib
     - importlib_resources
-    - yaml
-    - xml
     - datetime
-    - logging
     - -r requirements.txt
