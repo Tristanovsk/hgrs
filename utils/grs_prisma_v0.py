@@ -275,7 +275,7 @@ rho_int=[]
 for mu,fwhm in prisma_rsr.iterrows():
     sig = Gamma2sigma(fwhm.values)
     rsr = gaussian(wl_ref,mu,sig)
-    #rho_ = np.trapz(rho * rsr, wl_ref)/np.trapz(rsr, wl_ref)
+    #rho_ = np.trapezoid(rho * rsr, wl_ref)/np.trapezoid(rsr, wl_ref)
     #rho_int.append(rho_)
     axs.plot(wl_ref,rsr,'-k',lw=0.5,alpha=0.4)
 
@@ -329,7 +329,7 @@ Tg_int=[]
 for mu,fwhm in prisma_rsr.iterrows():
     sig = Gamma2sigma(fwhm.values)
     rsr = gaussian(wl_ref,mu,sig)
-    Tg_ = (Tg * rsr).integrate('wl')/np.trapz(rsr, wl_ref)
+    Tg_ = (Tg * rsr).integrate('wl')/np.trapezoid(rsr, wl_ref)
     Tg_int.append(Tg_.values)
     
 Tg_other = xr.DataArray(Tg_int,name='Ttot',coords={'wl':dc_l1c.wl.values})
@@ -348,7 +348,7 @@ for tcwv in [0,1,5,10,15,20,25,30,40,50,60]:
         sig = Gamma2sigma(fwhm.values)
         rsr = gaussian(wl_ref,mu,sig)
 
-        Ttot_ = (Ttot * rsr).integrate('wl')/np.trapz(rsr, wl_ref)
+        Ttot_ = (Ttot * rsr).integrate('wl')/np.trapezoid(rsr, wl_ref)
         Ttot_int.append(Ttot_.values)
         
     Twv.append(xr.DataArray(Ttot_int,name='Twv',coords={'wl':dc_l1c.wl.values}).assign_coords({'tcwv':tcwv}))    
@@ -1057,7 +1057,7 @@ for mu,fwhm in prisma_rsr.iterrows():
     sig = Gamma2sigma(fwhm.values)
     rsr = gaussian(wl_ref,mu,sig)
 
-    Tg_ = (Tg * rsr).integrate('wl')/np.trapz(rsr, wl_ref)
+    Tg_ = (Tg * rsr).integrate('wl')/np.trapezoid(rsr, wl_ref)
     Tg_int.append(Tg_.values)
 Tg_sat = xr.DataArray(Tg_int,name='Ttot',coords={'wl':dc_l1c.wl.values})
 

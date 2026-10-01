@@ -13,7 +13,7 @@ conda install -c conda-forge hvplot bokeh panel datashader jupyter jupyterlab
 
 ### Installing
 
-First, clone [the repository](https://github.com/Tristanovsk/prismapy#) and execute the following command in the
+First, clone [the repository](https://github.com/Tristanovsk/hgrs#) and execute the following command in the
 local copy:
 
 ```
@@ -24,7 +24,7 @@ Then, download the look-up table (LUT) files and copy them in a specific folder 
 
 [download lut](https://drive.google.com/drive/folders/1r3unjh8UYTvO87nbppqivVq_cwbVxhLk?usp=sharing)
 
-Write the path of the LUT folder in `hgrs/config.yml`, example:
+Write the path of the LUT folder in `hgrs/config/default_config.yml`, example:
 ```commandline
 path:
   data_root: '/DATA/git/satellite_app/hgrs/big_lut'
@@ -41,7 +41,6 @@ conda install xesmf
 
 ![example l2c](fig/test_L2C_Garda.png)
 ![example l1c](fig/test_L1C_Garda_water.png)
-
 
 
 

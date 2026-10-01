@@ -42,7 +42,12 @@ dependencies = [
     "zarr",
     "numba",
     "omnicloudmask",
-    "xesmf"
+    "xesmf",
+    "matplotlib",
+    "cartopy",
+    "pkg_resources",
+    "docopt",
+    "dask"
 ]
 dynamic = ["version"]
 
@@ -50,7 +55,8 @@ dynamic = ["version"]
 where = ["."]
 
 [tool.setuptools.package-data]
-"hgrs" = ['*.yml', 'data/lut/*.nc', 'data/aux/*']
+"hgrs" = ['data/lut/*.nc', 'data/aux/*']
+"hgrs.config" = ['*.yml']
 
 [tool.setuptools.exclude-package-data]
 "*" = [".gitattributes"]
@@ -64,6 +70,7 @@ version = { attr = "hgrs.__version__" }
 [project.scripts]
 hgrs_prisma = "hgrs.run_prisma:main"
 hgrs_enmap = "hgrs.run_enmap:main"
+hgrs_tanager = "hgrs.run_tanager:main"
 
 [project.urls]
 Homepage = "https://github.com/Tristanovsk/hgrs"
