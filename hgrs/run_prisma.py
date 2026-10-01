@@ -1,8 +1,7 @@
 ''' Executable to process PRISMA L1 images for aquatic environment
 
 Usage:
-  hgrs_prisma <l1_path> [--l2_path l2_path] [--cams_file file] [-o <ofile>] [--odir <odir>]\
- [--opac_model name] [--levname <lev>] [--no_clobber]
+  hgrs_prisma <l1_path> [--l2_path <l2_path>] [--cams_file <file>] [-o <ofile>] [--odir <odir>] [--levname <lev>] [--no_clobber] [--no-geoprojection]
   hgrs_prisma -h | --help
   hgrs_prisma -v | --version
 
@@ -20,24 +19,20 @@ Options:
   -o ofile           Full (absolute or relative) path to output L2 image.
   --odir odir        Ouput directory [default: ./]
   --levname lev      Level naming used for output product [default: L2A_hgrs]
-  --no_clobber       Do not process <input_file> if <output_file> already exists.
-  --opac_model name  Force the aerosol model (OPAC) to be 'name'
-                     (choice: ['ARCT_rh70', 'COAV_rh70', 'DESE_rh70',
-                     'MACL_rh70', 'URBA_rh70']) (WARNING: not implemented yet)
-
+  --no_clobber       Do not process an input file if the output file already exists.
+  --no-geoprojection  Keep the PRISMA L2A output on its native pixel grid and
+                     retain its longitude and latitude arrays for later projection.
 
   Example:
       L1_path=
       L2_path=
       CAMS_path=
       hgrs_prisma $L1_path --l2_path $L2_path --cams_file $CAMS_path
-
 '''
 
 import os, sys
 from docopt import docopt
 import logging
-from osgeo import gdal
 
 from . import __package__, __version__
 from .hgrs_process import Process
@@ -53,8 +48,8 @@ def main():
     l2_path = args['--l2_path']
     cams_file = args['--cams_file']
     noclobber = args['--no_clobber']
-    opac_model = args['--opac_model']
     lev = args['--levname']
+    geoproject = not args['--no-geoprojection']
 
     ##################################
     # File naming convention
@@ -89,7 +84,8 @@ def main():
 
     process_ = Process()
     process_.execute([l1_path,l2_path],
-                     cams_file
+                     cams_file,
+                     geoproject=geoproject,
                      )
 
     process_.write_output(outfile)

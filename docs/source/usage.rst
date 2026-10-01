@@ -24,7 +24,7 @@ Then, download the look-up table (LUT) files and copy them in a specific folder 
 
 `download lut <http://drive.google.com/drive/folders/1r3unjh8UYTvO87nbppqivVq_cwbVxhLk?usp=sharing>`_
 
-Write the path of the LUT folder in `hgrs/config.yml`, example:
+Write the path of the LUT folder in `hgrs/config/default_config.yml`, example:
 
 .. code::
 

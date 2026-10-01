@@ -1,0 +1,45 @@
+path:
+  # TODO: replace this machine-specific LUT root with a portable configuration source.
+  data_root: '/home/lavardma/Documents/project/atmospheric/hgrs/data/lut'
+  toa_lut: 'toa_lut_opac_wind_up_v3.nc'
+  trans_lut: 'transmittance_lut_opac_wind_v3.nc'
+  abs_gas_file: 'lut_abs_opt_thickness_normalized.nc'
+
+atmospheric_correction:
+  product:
+    sunglint_wavelengths_nm: [2150, 2250]
+    green_mask_wavelengths_nm: [540, 570]
+    nir_mask_wavelengths_nm: [850, 882]
+    green_swir_mask_wavelengths_nm: [1580, 1650]
+    x_coarsen: 20
+    y_coarsen: 20
+    block_size: 2
+    water_pixel_percentage: 20
+    angle_rounding_digits: 1
+    sunglint_threshold: 0.11
+    ndwi_threshold: 0.01
+    green_swir_index_threshold: 0.1
+    gas_absorption_scattering_coefficient: 0.35
+    prisma_land_mask_enabled: true
+    prisma_land_valid_classes: [0, 5, 6]
+    prisma_land_forbidden_classes: [1, 2, 3, 4, 10]
+  # Default to scene-mean AOT for final bidirectional transmittance.
+  # Set false to apply spatially varying smoothed AOT.
+  bidirectional_transmittance_global: false
+  water_vapor:
+    wavelengths_nm: [800, 1300]
+    first_guess: [2, -0.04, 0.1]
+    # Reworked defaults: weighted local TCWV smoothing with a 5x5 NaN fill.
+    smoothing_method: weighted_local
+    smoothing_window: [5, 5]
+  aerosol:
+    fit_wavelengths_nm: [1000, 1050, 1075, 1100, 1200, 1300, 1600, 1650, 1700, 2150, 2200, 2250]
+    nonnegative_reflectance_wavelengths_nm: [430, 490, 560, 650, 750, 800, 865, 1020]
+    excluded_wavelength_ranges_nm: [[935, 967], [1105, 1170], [1320, 1490], [1778, 2033], [2465, 2550]]
+    # Reworked default skips aerosol smoothing (raw AOT is used).
+    smoothing_method: none
+    smoothing_window: [1, 1]
+    smoothing_footprint: [3, 3]
+    solver_max_iterations: 20
+    solver_ftol: 1.0e-10
+    solver_warm_start: false

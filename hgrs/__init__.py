@@ -18,6 +18,15 @@ from .auxdata import AuxData, SolarIrradiance
 from .hgrs_kernel import Algo, WaterVapor, Aerosol, Product, Spectral
 from .hgrs_process import Process
 from .driver import Driver
+from .config import (
+    AerosolCorrectionConfig,
+    AerosolParameters,
+    AtmosphericCorrectionConfig,
+    ProductCorrectionConfig,
+    SensorDescription,
+    WaterVaporConfig,
+    WaterParameters,
+)
 
 
 import logging

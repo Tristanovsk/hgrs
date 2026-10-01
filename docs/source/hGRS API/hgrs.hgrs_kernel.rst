@@ -9,17 +9,6 @@
 
    
    
-   .. rubric:: Functions
-
-   .. autosummary::
-      :toctree:
-      :template: custom-base-template.rst
-   
-      Gamma2sigma
-      gaussian
-      super_gaussian
-      super_gaussian_fwhm2sigma
-   
    
 
    
@@ -34,7 +23,6 @@
       Algo
       Product
       Solver
-      Spectral
       WaterVapor
    
    

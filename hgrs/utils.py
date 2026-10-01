@@ -42,15 +42,47 @@ class Reproj():
         new_grid = xr.Dataset({'lat': (['lat'], grid_lats), 'lon': (['lon'], grid_lons)})
         new_grid = new_grid.chunk({"lat": 50, "lon": 50})
 
+        # Categorical masks must not be bilinearly interpolated: that creates
+        # fractional class values and changes the mask around boundaries.
+        categorical_names = {
+            "cloud_mask",
+            "sunglint_mask",
+            "landcover_mask",
+            "land_mask",
+        }
+        categorical = {
+            name: input_dataset[name]
+            for name in categorical_names
+            if name in input_dataset.data_vars
+        }
+        continuous_input = input_dataset.drop_vars(list(categorical))
+
         # use periodic=False if either or both the lat and lon dimensions are not regular
-        regridder = xe.Regridder(input_dataset, new_grid,
+        regridder = xe.Regridder(continuous_input, new_grid,
                                  method='bilinear',
                                  periodic=False,
                                  unmapped_to_nan=True,
                                  parallel=parallel)
 
         # regrid the data
-        output_dataset = regridder(input_dataset)
+        output_dataset = regridder(continuous_input)
+
+        if categorical:
+            mask_input = xr.Dataset(categorical).assign_coords(
+                lon=input_dataset.lon,
+                lat=input_dataset.lat,
+            )
+            mask_regridder = xe.Regridder(
+                mask_input,
+                new_grid,
+                method="nearest_s2d",
+                periodic=False,
+                unmapped_to_nan=True,
+                parallel=parallel,
+            )
+            mask_output = mask_regridder(mask_input)
+            for name in categorical:
+                output_dataset[name] = mask_output[name]
 
         # put the wavelength dependant data lost in the process, back in the dataset
         output_dataset = output_dataset.assign(fwhm=input_dataset.fwhm, F0=input_dataset.F0)
@@ -102,4 +134,3 @@ class Misc:
         d2 = 1.00011 + 0.034221 * np.cos(theta) + 0.00128 * np.sin(theta) + \
              0.000719 * np.cos(2 * theta) + 0.000077 * np.sin(2 * theta)
         return d2
-
