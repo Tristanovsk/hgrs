@@ -8,7 +8,6 @@ from tqdm.auto import tqdm
 
 import numpy as np
 import scipy.optimize as so
-import pandas as pd
 import xarray as xr
 
 import datetime as dt
@@ -30,6 +29,13 @@ class Process():
                 *,
                 sensor='enmap',
                 geoproject=True,
+                sun_azimuth=None,
+                sun_elevation=None,
+                satellite_inclination=None,
+                look_angle=None,
+                view_azimuth=None,
+                view_zenith=None,
+                ortho=False,
                 ):
 
         # ---------------------------------------
@@ -39,7 +45,61 @@ class Process():
         # action = 'load L1C image plus angle rasters'
         # pbar = tqdm(total=len(action),
         #             desc=action + f": {img_path} ")
-        if isinstance(img_path, str):
+        if sensor == 'emit':
+            logging.info('Opening EMIT L1B radiance image')
+            geometry = {
+                'sun_azimuth': sun_azimuth,
+                'sun_elevation': sun_elevation,
+                'view_azimuth': view_azimuth,
+                'view_zenith': view_zenith,
+            }
+            missing = [key for key, value in geometry.items() if value is None]
+            if missing:
+                raise ValueError(
+                    'EMIT processing requires scene geometry parameters: '
+                    + ', '.join(missing)
+                )
+            try:
+                driver = hgrs.Driver('emit')
+                l1_prod = driver.read_emit(
+                    img_path, **geometry, geoproject=geoproject, ortho=ortho,
+                )
+            except Exception as e:
+                logging.exception('Could not read EMIT input %s', img_path)
+                raise RuntimeError('EMIT input could not be read') from e
+        elif sensor == 'hyperion':
+            logging.info('Opening Hyperion L1R image')
+            geometry = {
+                'sun_azimuth': sun_azimuth,
+                'sun_elevation': sun_elevation,
+                'satellite_inclination': satellite_inclination,
+                'look_angle': look_angle,
+            }
+            missing = [key for key, value in geometry.items() if value is None]
+            if missing:
+                raise ValueError(
+                    'Hyperion processing requires scene geometry parameters: '
+                    + ', '.join(missing)
+                )
+            try:
+                driver = hgrs.HyperionDriver(img_path)
+                l1_prod = driver.read(**geometry, geoproject=geoproject)
+            except Exception as e:
+                logging.exception('Could not read Hyperion input %s', img_path)
+                raise RuntimeError('Hyperion input could not be read') from e
+        elif sensor == 'tanager':
+            logging.info('Opening Tanager image')
+            try:
+                driver = hgrs.Driver("tanager")
+                l1_prod = driver.read_tanager(
+                    img_path,
+                    reflectance_unit=True,
+                    geoproject=geoproject,
+                )
+            except Exception as e:
+                logging.exception('Could not read Tanager input %s', img_path)
+                raise RuntimeError('Tanager input could not be read') from e
+        elif isinstance(img_path, str):
             logging.info('Opening EnMAP image')
 
             try:
@@ -66,7 +126,24 @@ class Process():
         # get L1C object
         self.l1_prod = l1_prod
 
-        date = driver.scene_metadata.acquisition_time
+        acquisition_time = driver.scene_metadata.acquisition_time
+        if isinstance(acquisition_time, xr.DataArray):
+            acquisition_time = acquisition_time.values
+        if isinstance(acquisition_time, np.ndarray):
+            if acquisition_time.size != 1:
+                raise ValueError('Scene acquisition time must be scalar')
+            acquisition_time = acquisition_time.reshape(-1)[0]
+        # CAMS timestamps are UTC and timezone-naive. Normalize Python
+        # timezone-aware datetimes to naive UTC, then use NumPy datetime64 for
+        # selection against xarray's decoded time coordinate.
+        if isinstance(acquisition_time, dt.datetime):
+            if acquisition_time.tzinfo is not None:
+                acquisition_time = acquisition_time.astimezone(
+                    dt.timezone.utc
+                ).replace(tzinfo=None)
+            date = np.datetime64(acquisition_time, 'us')
+        else:
+            date = np.datetime64(acquisition_time)
         if geoproject:
             raster = l1_prod.sza.rio.reproject(4326)
             clon, clat = float(raster.x.mean()), float(raster.y.mean())
@@ -79,15 +156,24 @@ class Process():
         # Load CAMS data for this scene
         # -----------------------------------------
         logging.info('get CAMS data for scene')
-        cams = xr.open_dataset(cams_path, decode_cf=True,
-                               chunks={'time': 1, 'x': 500, 'y': 500})
+        # Reanalysis files use ``valid_time`` while forecast files use ``time``
+        # (or forecast_period/forecast_reference_time before normalization).
+        # Do not request chunks for a dimension that may not exist.
+        cams = xr.open_dataset(cams_path, decode_cf=True)
 
         # fix for new ADS format (sept 2024)
         if ('forecast_period' in cams.dims) & ('forecast_reference_time' in cams.dims):
             cams = cams.stack(time_buffer=['forecast_period', 'forecast_reference_time']).swap_dims(
                 {'time_buffer': 'valid_time'}).sortby('valid_time').rename(
                 {'valid_time': 'time'}).drop_vars(['time_buffer'])
+        elif 'time' not in cams.dims and 'valid_time' in cams.dims: # reanalysis
+            cams = cams.rename({'valid_time': 'time'})
 
+        # Match the selection scalar to the decoded CAMS coordinate dtype.
+        # Use the same datetime unit as decoded CAMS files where supported.
+        cams_time_dtype = cams.time.dtype
+        if np.issubdtype(cams_time_dtype, np.datetime64):
+            date = date.astype(cams_time_dtype)
         cams = cams.sel(time=date, method='nearest')
         cams = cams.sel(latitude=clat, longitude=clon, method='nearest')
 
@@ -107,27 +193,42 @@ class Process():
         # Apply cloud, water masking
         # -----------------------------------------
 
-        # TODO put omnimask settins (bands) in default_config.yml
+        # TODO put omnimask settings (bands) in default_config.yml
         logging.info('Apply omnicloudmask')
         red_index = 670
         green_index = 550
         nir_index = 940
-        rgnir = prod.raster.Rtoa.sel(wl=[red_index, green_index, nir_index], method='nearest').fillna(0)  # .values
+        rgnir = prod.raster.Rtoa.sel(
+            wl=[red_index, green_index, nir_index], method='nearest'
+        ).fillna(0)
         omnimask = prod.get_omnicloudmask(rgnir)
-        prod.raster['Rtoa'] = prod.raster['Rtoa'].where(omnimask == 0)
-
+        # OmniCloudMask classes 1 and 2 are thick/thin cloud; class 3 is
+        # cloud shadow and is intentionally not labeled as cloud here.
+        prod.raster['cloud_mask'] = (omnimask.isin([1, 2])).rename('cloud_mask')
+        prod.raster['cloud_mask'].attrs.update(
+            long_name='cloud mask',
+            description='True for OmniCloudMask thick or thin cloud pixels; False otherwise',
+        )
         logging.info('Apply water masking')
         prod.apply_water_masks()
+        # Evaluate spectral water tests on the original Rtoa values so a cloud
+        # classification does not change the independent water-mask meaning.
+        prod.raster['Rtoa'] = prod.raster['Rtoa'].where(omnimask == 0)
         # Keep the non-land-masked radiance for full-resolution correction;
         # the land mask is only used to select pixels for retrievals.
-        full_resolution_rtoa = prod.raster.Rtoa.copy(deep=True)
-        prod.apply_land_mask()
+        if driver.sensor_description.name == "PRISMA":
+            full_resolution_rtoa = prod.raster.Rtoa.copy(deep=True)
+            prod.apply_land_mask()
 
         # -----------------------------------------
         # Construct coarse resolution raster
         # -----------------------------------------
         logging.info('Construct coarse resolution raster')
         prod.get_coarse_masked_raster()
+        if driver.sensor_description.name == "PRISMA":
+
+            prod.raster['Rtoa'] = full_resolution_rtoa
+            del full_resolution_rtoa
         # prod.plot_water_pix_number()
 
         # -----------------------------------------
@@ -175,7 +276,6 @@ class Process():
         # ------------------------------------------
         logging.info('process full resolution')
 
-        prod.raster['Rtoa'] = full_resolution_rtoa
         prod.raster = prod.remove_wl_dataset(prod.raster, prod.wl_to_remove)
         prod.other_gas_correction(raster_name='raster', variable='Rtoa')
 
@@ -329,6 +429,8 @@ class Process():
         # geom = prod.raster[['lon', 'lat']].drop_vars('tcwv')
         # Rrs_ = Rrs_l2.reset_coords().drop_vars(['model', 'z']).rename({'tcwv': 'tcwv_full', 'aot_ref': 'aot_ref_full'}).set_coords(['time','spatial_ref'])
         l2_prod = xr.merge([l2_prod, wv, aero, water_pixel_prop])
+        for mask_name in ('water_mask', 'cloud_mask'):
+            l2_prod[mask_name] = prod.raster[mask_name].astype(bool)
         if "landcover_mask" in prod.raster:
             l2_prod["landcover_mask"] = prod.raster.landcover_mask
         if hasattr(prod, "land_mask"):
@@ -451,6 +553,8 @@ class Process():
                          "complevel": complevel}}
 
         for mask_name in (
+            'water_mask',
+            'cloud_mask',
             'water_validity_mask',
             'aerosol_validity_mask',
             'water_vapor_validity_mask',
@@ -470,6 +574,43 @@ class Process():
             os.mkdir(odir)
 
         output_product = self.l2_prod.sel(wl=slice(400, 1150))
+
+        # Keep NetCDF raster chunks small and CF coordinate variables clean
+        # for the newly added sensor products. The default xarray chunking
+        # splits Rrs across many spectral bands, so reading one QGIS band can
+        # require decompressing a very large 3D chunk.
+        sensor = output_product.attrs.get('platform')
+        source_name = str(output_product.attrs.get('L1C_product_name', '')).lower()
+        if sensor not in {'Tanager', 'Hyperion', 'EMIT'}:
+            if 'basic_radiance_hdf5' in source_name:
+                sensor = 'Tanager'
+            elif source_name.endswith('.l1r'):
+                sensor = 'Hyperion'
+        if sensor in {'Tanager', 'Hyperion', 'EMIT'}:
+            height = output_product.sizes['y']
+            width = output_product.sizes['x']
+            encoding['Rrs']['chunksizes'] = (
+                1, min(256, height), min(256, width)
+            )
+            if 'brdfg_full' in output_product:
+                encoding['brdfg_full'] = {
+                    'dtype': 'int16', 'scale_factor': 0.00001,
+                    'add_offset': .2, '_FillValue': -32768, 'zlib': True,
+                    'complevel': complevel,
+                    'chunksizes': (min(256, height), min(256, width)),
+                }
+
+
+            # Re-encoding an opened NetCDF dataset can otherwise preserve its
+            # old auxiliary-coordinate list, including the scalar variables
+            # removed above. Let xarray rebuild coordinates from the current
+            # dataset structure.
+            for variable in output_product.variables.values():
+                variable.encoding.pop('coordinates', None)
+            # CF coordinate variables should not use a NaN _FillValue.
+            for coordinate in ('x', 'y', 'wl', 'xc', 'yc'):
+                if coordinate in output_product.coords:
+                    encoding[coordinate] = {'_FillValue': None}
 
         # NetCDF attributes do not support boolean values. Correction helpers
         # attach boolean flags to variables, and xarray carries those attrs

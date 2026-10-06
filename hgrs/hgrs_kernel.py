@@ -218,12 +218,18 @@ class Product():
         b1600 = self.raster.Rtoa.sel(wl=self.water_parameters.wl_1600).mean(dim='wl')
         green_swir_index = (green - b1600) / (green + b1600)
         b2200 = self.raster.Rtoa.sel(wl=self.water_parameters.wl_sunglint).mean(dim='wl')
+        water_mask = (
+            (ndwi > self.water_parameters.mask.ndwi_threshold)
+            & (b2200 < self.water_parameters.mask.sunglint_threshold)
+            & (green_swir_index > self.water_parameters.mask.green_swir_index_threshold)
+        )
+        self.raster['water_mask'] = water_mask.rename('water_mask')
+        self.raster['water_mask'].attrs.update(
+            long_name='spectral water mask',
+            description='True where the pixel passes all configured spectral water tests',
+        )
         self.raster['Rtoa'] = self.raster.Rtoa.where(
-            ndwi > self.water_parameters.mask.ndwi_threshold
-        ).where(
-            b2200 < self.water_parameters.mask.sunglint_threshold
-        ).where(
-            green_swir_index > self.water_parameters.mask.green_swir_index_threshold
+            water_mask
         ).load()
 
     def apply_land_mask(self):
@@ -833,17 +839,24 @@ class Aerosol(Solver):
         self.rot = auxdata.rot.interp(wl=wl) * self.pressure / self.auxdata.pressure_rot_ref
 
         aot_refs = [0, *np.logspace(-3, np.log10(0.8), 100)]
-        self.aot_lut = self.sensor_description.interpolate(
-            self.aero_lut.sel(model=self.aerosol_model).aot,
-            wl_sensor=wl,
-        ).interp(aot_ref=aot_refs, method='quadratic').dropna('aot_ref')
+        self.aot_lut = (
+            self.aero_lut
+            .sel(model=self.aerosol_model)
+            .aot.interp(wl=wl,method="quadratic")
+            .interp(aot_ref=aot_refs, method='quadratic').dropna('aot_ref')
+        )
 
-        norm_radiance = self.aero_lut.sel(model=self.aerosol_model
-                                          ).I.interp(vza=vza, azi=raa_lut, method='linear'
-                                                     ).interp(sza=sza, method='quadratic').squeeze()
-        self.Rtoa_lut = self.sensor_description.interpolate(
-            norm_radiance, wl_sensor=wl
-        ).interp(aot_ref=aot_refs, method='quadratic').dropna('aot_ref') / np.cos(np.radians(sza))
+        norm_radiance = (
+            self.aero_lut
+            .sel(model=self.aerosol_model).I
+            .interp(vza=vza, azi=raa_lut, method='linear')
+            .interp(sza=sza, method='quadratic').squeeze()
+        )
+        self.Rtoa_lut = (
+            norm_radiance.interp(wl=wl, method="quadratic")
+            .interp(aot_ref=aot_refs, method='quadratic')
+            .dropna('aot_ref') / np.cos(np.radians(sza))
+        )
 
     def transmittance_dir(self, aot, M, rot=0):
         return np.exp(-(rot + aot) * M)

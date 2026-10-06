@@ -11,10 +11,57 @@ class Reproj():
         pass
 
     @staticmethod
+    def ground_sampling_resolution_m(lon, lat):
+        """Estimate the finer native ground sampling from geolocation arrays."""
+        lon = np.asarray(lon, dtype=np.float64)
+        lat = np.asarray(lat, dtype=np.float64)
+        if lon.ndim != 2 or lat.shape != lon.shape or min(lon.shape) < 2:
+            raise ValueError('lon and lat must be matching 2D arrays with at least 2 pixels per axis')
+
+        earth_radius_m = 6_371_008.8
+
+        def distance(lon1, lat1, lon2, lat2):
+            lon1, lat1, lon2, lat2 = map(np.radians, (lon1, lat1, lon2, lat2))
+            delta_lon = lon2 - lon1
+            delta_lat = lat2 - lat1
+            haversine = (np.sin(delta_lat / 2.0) ** 2
+                         + np.cos(lat1) * np.cos(lat2)
+                         * np.sin(delta_lon / 2.0) ** 2)
+            return 2.0 * earth_radius_m * np.arcsin(
+                np.sqrt(np.clip(haversine, 0.0, 1.0))
+            )
+
+        middle_row = lon.shape[0] // 2
+        middle_column = lon.shape[1] // 2
+        row_half_width = max(1, lon.shape[0] // 100)
+        column_half_width = max(1, lon.shape[1] // 100)
+        row_slice = slice(max(0, middle_row - row_half_width),
+                          min(lon.shape[0], middle_row + row_half_width + 1))
+        column_slice = slice(max(0, middle_column - column_half_width),
+                             min(lon.shape[1], middle_column + column_half_width + 1))
+        cross_track = distance(
+            lon[row_slice, :-1], lat[row_slice, :-1],
+            lon[row_slice, 1:], lat[row_slice, 1:],
+        )
+        along_track = distance(
+            lon[:-1, column_slice], lat[:-1, column_slice],
+            lon[1:, column_slice], lat[1:, column_slice],
+        )
+        cross_track = cross_track[np.isfinite(cross_track) & (cross_track > 0)]
+        along_track = along_track[np.isfinite(along_track) & (along_track > 0)]
+        spacings = [np.median(axis) for axis in (cross_track, along_track) if axis.size]
+        if not spacings:
+            raise ValueError('Could not estimate ground sampling from geolocation arrays')
+        # Use the finer axis so the output grid does not discard native detail.
+        return float(min(spacings))
+
+    @staticmethod
     def regridding(input_dataset,
                    output_grid_size=(1200, 1200),
                    d_input_crs=4326,
-                   parallel=True):
+                   parallel=True,
+                   *,
+                   output_resolution_m=None):
         """
         Take a PRISMA L1C product in sensor geometry (x,y) as input and
         return it in a georeferenced geometry (lon,lat).
@@ -36,9 +83,35 @@ class Reproj():
         attrs = input_dataset.attrs
         #input_dataset = input_dataset.set_coords(["lon", "lat"])
 
+        # A sensor may request a geographic grid at a ground resolution
+        # derived from its native sampling. Keep the historical fixed-size
+        # grid as the default for existing callers.
+        lon_min = float(input_dataset.lon.min().values)
+        lon_max = float(input_dataset.lon.max().values)
+        lat_min = float(input_dataset.lat.min().values)
+        lat_max = float(input_dataset.lat.max().values)
+        if output_resolution_m is not None:
+            if not np.isfinite(output_resolution_m) or output_resolution_m <= 0:
+                raise ValueError('output_resolution_m must be a positive finite value')
+            center_latitude = 0.5 * (lat_min + lat_max)
+            meters_per_degree_lat = 111_320.0
+            meters_per_degree_lon = meters_per_degree_lat * np.cos(
+                np.radians(center_latitude)
+            )
+            output_grid_size = (
+                max(2, int(np.ceil((lon_max - lon_min) * meters_per_degree_lon
+                                   / output_resolution_m)) + 1),
+                max(2, int(np.ceil((lat_max - lat_min) * meters_per_degree_lat
+                                   / output_resolution_m)) + 1),
+            )
+            logging.info(
+                'using geographic grid at %.2f m ground resolution (%d x %d)',
+                output_resolution_m, output_grid_size[0], output_grid_size[1],
+            )
+
         # make the grid that the data will be regridded to
-        grid_lons = np.linspace(input_dataset.lon.min().values, input_dataset.lon.max().values, output_grid_size[0])
-        grid_lats = np.linspace(input_dataset.lat.min().values, input_dataset.lat.max().values, output_grid_size[1])
+        grid_lons = np.linspace(lon_min, lon_max, output_grid_size[0])
+        grid_lats = np.linspace(lat_min, lat_max, output_grid_size[1])
         new_grid = xr.Dataset({'lat': (['lat'], grid_lats), 'lon': (['lon'], grid_lons)})
         new_grid = new_grid.chunk({"lat": 50, "lon": 50})
 
