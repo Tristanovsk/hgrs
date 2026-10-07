@@ -27,7 +27,7 @@ Then, download the look-up table (LUT) files and copy them in a specific folder 
 Write the path of the LUT folder in `hgrs/config.yml`, example:
 ```commandline
 path:
-  data_root: '/DATA/git/satellite_app/hgrs/big_lut'
+  data_root: 'path/to/lut'
 ```
 
 Optional dependency, if you want to use the reprojection feature for PRISMA please install xemsf:
