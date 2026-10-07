@@ -1,4 +1,4 @@
-''' Executable to process PRISMA L1 images for aquatic environment
+''' Executable to process EnMAP L1C images for aquatic environment
 
 Usage:
   hgrs_enmap <l1_path>  [--cams_file file] [-o <ofile>] [--odir <odir>]\
