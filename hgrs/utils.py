@@ -74,29 +74,42 @@ class Misc:
 
     @staticmethod
     def get_pressure(alt, psl):
-        '''Compute the pressure for a given altitude
-           alt : altitude in meters (float or np.array)
-           psl : pressure at sea level in hPa
-           palt : pressure at the given altitude in hPa'''
+        r'''Compute the pressure for a given altitude (barometric formula)
+
+        .. math::
+
+           P(z) = P_{sl} \left(1 - \frac{0.0065\, z}{288.15}\right)^{5.255}
+
+        :param alt: altitude :math:`z` in meters (float or np.array)
+        :param psl: pressure at sea level :math:`P_{sl}` in hPa
+        :return: pressure at the given altitude in hPa'''
 
         palt = psl * (1. - 0.0065 * np.nan_to_num(alt) / 288.15) ** 5.255
         return palt
 
     @staticmethod
     def transmittance_dir(aot, air_mass, rot=0):
+        r'''Direct transmittance :math:`T_{dir} = \exp\left[-(\tau_R + \tau_a) M\right]`'''
         return np.exp(-(rot + aot) * air_mass)
 
     @staticmethod
     def air_mass(sza, vza):
+        r'''Two-way geometric air mass :math:`M = 1/\cos\theta_s + 1/\cos\theta_v` (angles in degrees)'''
         return 1 / np.cos(np.radians(vza)) + 1 / np.cos(np.radians(sza))
 
     @staticmethod
     def earth_sun_correction(dayofyear):
-        '''
-        Earth-Sun distance correction factor for adjustment of mean solar irradiance
+        r'''
+        Earth-Sun distance correction factor for adjustment of mean solar irradiance (Spencer, 1971)
 
-        :param dayofyear:
-        :return: correction factor
+        .. math::
+
+           \left(\frac{d_0}{d}\right)^2 = 1.00011 + 0.034221 \cos\Theta + 0.00128 \sin\Theta
+           + 0.000719 \cos 2\Theta + 0.000077 \sin 2\Theta,
+           \qquad \Theta = \frac{2\pi\, \mathrm{DOY}}{365}
+
+        :param dayofyear: day of the year (DOY)
+        :return: correction factor, multiplying the mean solar irradiance
         '''
         theta = 2. * np.pi * dayofyear / 365
         d2 = 1.00011 + 0.034221 * np.cos(theta) + 0.00128 * np.sin(theta) + \

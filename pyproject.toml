@@ -57,6 +57,14 @@ where = ["."]
 
 [project.optional-dependencies]
 dev = ["black", "bumpver", "isort", "pip-tools", "pytest"]
+docs = [
+    "sphinx>=7",
+    "sphinx-book-theme>=1.1",
+    "sphinx-copybutton",
+    "myst-nb>=1.0",
+    "linkify-it-py",
+    "ipython",
+]
 
 [tool.setuptools.dynamic]
 version = { attr = "hgrs.__version__" }

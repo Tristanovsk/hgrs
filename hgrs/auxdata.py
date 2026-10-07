@@ -34,6 +34,13 @@ rayleigh_file = resource_filename(__package__, 'data/aux/rayleigh_bodhaine.txt')
 
 
 class AuxData():
+    r'''
+    Auxiliary spectral data: solar irradiance, Rayleigh optical thickness (Bodhaine et al., 1999) and
+    mean spectral shape of the sunglint :math:`\varepsilon(\lambda)`.
+
+    :param wl: wavelengths (nm) onto which the data are interpolated
+    '''
+
     def __init__(self, wl=None):
         # load data from raw files
         self.solar_irr = SolarIrradiance()
@@ -63,6 +70,11 @@ class AuxData():
 
 
 class SolarIrradiance():
+    '''
+    Extraterrestrial solar irradiance spectra (mW m-2 nm-1, 300-2600 nm): TSIS-1 hybrid reference
+    spectrum (``tsis``, used by hGRS), Thuillier, Gueymard and Kurucz.
+    '''
+
     def __init__(self, wl=None):
         # load data from raw files
         self.wl_min = 300
@@ -104,7 +116,7 @@ class SolarIrradiance():
 
     def read_gueymard(self):
         '''
-        Open Thuillier data and convert them into xarray in mW/m2/nm
+        Open Gueymard data and convert them into xarray in mW/m2/nm
         :return:
         '''
         solar_irr = pd.read_csv(gueymard_file, sep=r'\s+', skiprows=30, header=None)
