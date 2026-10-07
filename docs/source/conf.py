@@ -86,11 +86,15 @@ html_theme_options = {
     'use_download_button': True,
     'navigation_with_keys': True,
     'show_toc_level': 2,
+    'logo': {
+        'image_light': '_static/hgrs_logo_light.png',
+        'image_dark': '_static/hgrs_logo_dark.png',
+    },
 }
 
 html_title = ''
-html_logo = '_static/hgrs_logo_v0.svg'
-html_favicon = '_static/hgrs_logo_v0_light.png'
+html_logo = '_static/hgrs_logo_light.png'
+html_favicon = '_static/hgrs_favicon.png'
 
 html_static_path = ['_static']
 html_css_files = ['custom.css']
