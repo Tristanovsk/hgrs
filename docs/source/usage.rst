@@ -46,7 +46,7 @@ Python
    process.write_output('ENMAP01_L2A_hgrs.nc')
 
 The individual steps can also be run one by one with the classes of :py:mod:`hgrs.hgrs_kernel` (see
-the :doc:`tutorials <tutorials/basics>` and the :doc:`api/hgrs_kernel` overview).
+the :doc:`tutorials <tutorials/process_image>` and the :doc:`api/hgrs_kernel` overview).
 
 Output product
 --------------

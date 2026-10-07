@@ -37,7 +37,9 @@ on the CAMS atmospheric composition.
    :maxdepth: 2
    :caption: Tutorials
 
-   tutorials/basics
+   tutorials/process_image
+   tutorials/batch_processing
+   tutorials/visualization
 
 .. toctree::
    :maxdepth: 2
