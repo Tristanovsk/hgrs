@@ -18,6 +18,24 @@ from . import SolarIrradiance, Reproj, Misc, Spectral
 
 
 class Driver():
+    r'''
+    Readers of the PRISMA and EnMAP L1 products.
+
+    The TOA radiance :math:`L_{TOA}` (mW m\ :sup:`-2` sr\ :sup:`-1` nm\ :sup:`-1`) is converted into TOA
+    reflectance (``reflectance_unit=True``)
+
+    .. math::
+
+       R_{TOA}(\lambda) = \frac{\pi\, L_{TOA}(\lambda)}{F_0(\lambda)\, \cos\theta_s}
+
+    where :math:`F_0` is the TSIS-1 solar irradiance (Coddington et al., 2021) corrected for the
+    Earth-Sun distance (:py:meth:`~hgrs.utils.Misc.earth_sun_correction`) and convolved with the
+    spectral response of the bands, and :math:`\theta_s` the solar zenith angle (mean value over the
+    image for EnMAP, scene value for PRISMA).
+
+    :param satellite: ``'enmap'`` or ``'prisma'``
+    '''
+
     def __init__(self,
                  satellite='enmap'):
 
