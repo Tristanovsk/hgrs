@@ -39,6 +39,21 @@ class AuxData():
     mean spectral shape of the sunglint :math:`\varepsilon(\lambda)`.
 
     :param wl: wavelengths (nm) onto which the data are interpolated
+
+    Examples
+    --------
+    >>> from hgrs.auxdata import AuxData
+    >>> aux = AuxData(wl=[440, 550, 865])
+    >>> aux.rot.values.round(4)          # Rayleigh optical thickness at 1013.25 hPa
+    array([0.2422, 0.0969, 0.0155])
+    >>> aux.sunglint_eps.values.round(4)
+    array([1.5773, 1.5332, 1.4777])
+
+    References
+    ----------
+    * Bodhaine, B. A., Wood, N. B., Dutton, E. G., Slusser, J. R. (1999). On Rayleigh optical depth
+      calculations. *Journal of Atmospheric and Oceanic Technology*, 16(11), 1854-1861.
+      https://doi.org/10.1175/1520-0426(1999)016<1854:ORODC>2.0.CO;2
     '''
 
     def __init__(self, wl=None):
@@ -73,6 +88,27 @@ class SolarIrradiance():
     '''
     Extraterrestrial solar irradiance spectra (mW m-2 nm-1, 300-2600 nm): TSIS-1 hybrid reference
     spectrum (``tsis``, used by hGRS), Thuillier, Gueymard and Kurucz.
+
+    Examples
+    --------
+    >>> from hgrs.auxdata import SolarIrradiance
+    >>> solar_irr = SolarIrradiance()
+    >>> round(float(solar_irr.tsis.sel(wl=550, method='nearest')), 1)
+    1967.0
+    >>> solar_irr.tsis.attrs['units']
+    'mW m-2 nm-1'
+
+    References
+    ----------
+    * Coddington, O. M., Richard, E. C., Harber, D., et al. (2021). The TSIS-1 hybrid solar reference
+      spectrum. *Geophysical Research Letters*, 48(12), e2020GL091709. https://doi.org/10.1029/2020GL091709
+    * Thuillier, G., Hersé, M., Labs, D., et al. (2003). The solar spectral irradiance from 200 to
+      2400 nm as measured by the SOLSPEC spectrometer from the ATLAS and EURECA missions. *Solar
+      Physics*, 214, 1-22. https://doi.org/10.1023/A:1024048429145
+    * Gueymard, C. A. (2004). The sun's total and spectral irradiance for solar energy applications and
+      solar radiation models. *Solar Energy*, 76(4), 423-453. https://doi.org/10.1016/j.solener.2003.08.039
+    * Kurucz, R. L. (1992). Synthetic infrared spectra. In D. M. Rabin, J. T. Jefferies (eds.),
+      *Infrared Solar Physics*, IAU Symposium 154, Kluwer, 523-531.
     '''
 
     def __init__(self, wl=None):
@@ -88,7 +124,8 @@ class SolarIrradiance():
     def read_tsis(self):
         '''
         Open TSIS data and convert them into xarray in mW/m2/nm
-        :return:
+
+        :return: TSIS-1 spectral irradiance (DataArray, wl in nm)
         '''
         tsis = xr.open_dataset(tsis_file)
         tsis = tsis.set_index(wavelength='Vacuum Wavelength').rename(
@@ -105,7 +142,8 @@ class SolarIrradiance():
     def read_thuillier(self):
         '''
         Open Thuillier data and convert them into xarray in mW/m2/nm
-        :return:
+
+        :return: spectral irradiance (DataArray, wl in nm)
         '''
         solar_irr = xr.open_dataset(thuillier_file).squeeze().data.drop('time') * 1e3
         solar_irr = solar_irr.rename({'wavelength': 'wl'})
@@ -117,7 +155,8 @@ class SolarIrradiance():
     def read_gueymard(self):
         '''
         Open Gueymard data and convert them into xarray in mW/m2/nm
-        :return:
+
+        :return: spectral irradiance (DataArray, wl in nm)
         '''
         solar_irr = pd.read_csv(gueymard_file, sep=r'\s+', skiprows=30, header=None)
         solar_irr.columns = ['wl', 'data']
@@ -131,7 +170,8 @@ class SolarIrradiance():
     def read_kurucz(self):
         '''
         Open Kurucz data and convert them into xarray in mW/m2/nm
-        :return:
+
+        :return: spectral irradiance (DataArray, wl in nm)
         '''
         solar_irr = pd.read_csv(kurucz_file, sep=r'\s+', skiprows=11, header=None)
         solar_irr.columns = ['wl', 'data']
@@ -147,6 +187,7 @@ class SolarIrradiance():
     def interp(self, wl=[440, 550, 660, 770, 880]):
         '''
         Interpolation on new wavelengths
+
         :param wl: wavelength in nm
         :return: update variables of the class
         '''
@@ -165,10 +206,11 @@ class SolarIrradiance():
     def convolve(self, F0, fwhm, info={}):
         '''
         Convolve with spectral response of sensor based on full width at half maximum of each band
+
         :param F0: xarray solar irradiance to convolve, coord=wl
         :param fwhm: xarray with data=fwhm containing full width at half maximum in nm, and coords=wl
         :param info: optional parameter to feed the attributes of the output xarray
-        :return:
+        :return: DataArray ``F0`` on the central wavelengths of the bands
         '''
         wl_ref = F0.wl
         F0_int = []

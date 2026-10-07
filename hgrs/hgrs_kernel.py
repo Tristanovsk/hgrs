@@ -185,6 +185,39 @@ Typical sequence (``l1c`` = L1C raster with ``Rtoa``, ``fwhm`` and angles), as i
     aero = Aerosol(prod, aerosol_model='COAV_rh70')
     aero.solve()
     aero.get_atmo_parameters(prod)             # R_diff, T_dir rasters
+
+References
+==========
+
+The radiative transfer look-up tables were computed with the OSOAA code [Chami2015]_ for the OPAC aerosol
+models [Hess1998]_, the absorption of the gases with the REPTRAN parameterization [Gasteiger2014]_ and the
+Rayleigh optical thickness follows [Bodhaine1999]_. The SWIR sunglint correction follows the GRS
+algorithm [Harmel2018]_. The optimizations use the trust-region reflective method of
+:py:func:`scipy.optimize.least_squares` [Branch1999]_ and SLSQP [Kraft1988]_.
+
+.. [Harmel2018] Harmel, T., Chami, M., Tormos, T., Reynaud, N., Danis, P.-A. (2018). Sunglint correction of the
+   Multi-Spectral Instrument (MSI)-SENTINEL-2 imagery over inland and sea waters from SWIR bands.
+   *Remote Sensing of Environment*, 204, 308-321. https://doi.org/10.1016/j.rse.2017.10.022
+.. [Chami2015] Chami, M., Lafrance, B., Fougnie, B., Chowdhary, J., Harmel, T., Waquet, F. (2015). OSOAA: a
+   vector radiative transfer model of coupled atmosphere-ocean system for a rough sea surface
+   application to the estimates of the directional variations of the water leaving reflectance to
+   better process multi-angular satellite sensors data over the ocean. *Optics Express*, 23(21),
+   27829-27852. https://doi.org/10.1364/OE.23.027829
+.. [Hess1998] Hess, M., Koepke, P., Schult, I. (1998). Optical properties of aerosols and clouds: the software
+   package OPAC. *Bulletin of the American Meteorological Society*, 79(5), 831-844.
+   https://doi.org/10.1175/1520-0477(1998)079<0831:OPOAAC>2.0.CO;2
+.. [Gasteiger2014] Gasteiger, J., Emde, C., Mayer, B., Buras, R., Buehler, S. A., Lemke, O. (2014). Representative
+   wavelengths absorption parameterization applied to satellite channels and spectral bands.
+   *Journal of Quantitative Spectroscopy and Radiative Transfer*, 148, 99-115.
+   https://doi.org/10.1016/j.jqsrt.2014.06.024
+.. [Bodhaine1999] Bodhaine, B. A., Wood, N. B., Dutton, E. G., Slusser, J. R. (1999). On Rayleigh optical depth
+   calculations. *Journal of Atmospheric and Oceanic Technology*, 16(11), 1854-1861.
+   https://doi.org/10.1175/1520-0426(1999)016<1854:ORODC>2.0.CO;2
+.. [Branch1999] Branch, M. A., Coleman, T. F., Li, Y. (1999). A subspace, interior, and conjugate gradient method
+   for large-scale bound-constrained minimization problems. *SIAM Journal on Scientific Computing*,
+   21(1), 1-23. https://doi.org/10.1137/S1064827595289108
+.. [Kraft1988] Kraft, D. (1988). *A software package for sequential quadratic programming*. Technical Report
+   DFVLR-FB 88-28, DLR German Aerospace Center, Institute for Flight Mechanics, Köln.
 '''
 
 import os
@@ -256,6 +289,18 @@ class Product():
     with the reflectances averaged over 540-570 nm (:math:`\lambda_G`), 850-882 nm
     (:math:`\lambda_{NIR}`), 1580-1650 nm and 2150-2250 nm. A mega-pixel is processed when it contains at
     least ``pixel_percentage`` = 20 % of water pixels.
+
+    Examples
+    --------
+    .. code-block:: python
+
+       import hgrs
+
+       driver = hgrs.Driver('enmap')
+       l1c = driver.read_l1c_enmap('ENMAP01-____L1C-DT0000088121_..._V010502_...', reflectance_unit=True)
+       prod = hgrs.Product(l1c, xcoarsen=20, ycoarsen=20)
+       prod.apply_water_masks()          # Rtoa set to NaN outside water pixels
+       prod.air_mass_mean, prod.wl_sunglint
     '''
 
     def __init__(self,
@@ -382,24 +427,35 @@ class Product():
                           rgnir):
 
         '''
-        Apply OmniCloudMAsk for clouds and cloud shadows masking
+        Apply OmniCloudMask (Wright et al., 2025) for clouds and cloud shadows masking
+        (https://github.com/DPIRD-DMA/OmniCloudMask).
 
-        Outputs:
-            0 = Clear
-            1 = Thick Cloud
-            2 = Thin Cloud
-            3 = Cloud Shadow
+        Classes of the output mask:
 
-        see https://github.com/DPIRD-DMA/OmniCloudMask
+        - 0 = clear
+        - 1 = thick cloud
+        - 2 = thin cloud
+        - 3 = cloud shadow
 
-        refs:
-         Wright, N., Duncan, J. M. A., Callow, J. N., Thompson, S. E., & George, R. J. (2025).
-         Training sensor-agnostic deep learning models for remote sensing:
-         Achieving state-of-the-art cloud and cloud shadow identification with OmniCloudMask.
-         Remote Sensing of Environment, 322, 114694. https://doi.org/10.1016/J.RSE.2025.114694
-
-        :param rgnir: raster xarray object with the red, green and nir bands
+        :param rgnir: raster xarray object with the red, green and nir bands (in this order)
         :return omnimask: raster of the retrieved mask
+
+        Examples
+        --------
+        As in :py:meth:`hgrs.hgrs_process.Process.execute`:
+
+        .. code-block:: python
+
+           rgnir = prod.raster.Rtoa.sel(wl=[670, 550, 940], method='nearest').fillna(0)
+           omnimask = prod.get_omnicloudmask(rgnir)
+           prod.raster['Rtoa'] = prod.raster['Rtoa'].where(omnimask == 0)
+
+        References
+        ----------
+        * Wright, N., Duncan, J. M. A., Callow, J. N., Thompson, S. E., George, R. J. (2025). Training
+          sensor-agnostic deep learning models for remote sensing: achieving state-of-the-art cloud and
+          cloud shadow identification with OmniCloudMask. *Remote Sensing of Environment*, 322, 114694.
+          https://doi.org/10.1016/j.rse.2025.114694
         '''
 
         pred = predict_from_array(rgnir.fillna(0).values)
@@ -439,6 +495,7 @@ class Product():
 
     @staticmethod
     def remove_wl_dataarray(xarr, wl_to_remove, drop=True):
+        '''Remove the bands within the wavelength intervals ``wl_to_remove`` (list of (min, max) in nm).'''
         xarr_ = xarr.isel(x=1, y=1)
         for wls in wl_to_remove:
             wl_min, wl_max = wls
@@ -448,6 +505,16 @@ class Product():
 
     @staticmethod
     def remove_wl_dataset(xds, wl_to_remove, variable='Rtoa', drop=True):
+        '''
+        Remove the bands within the wavelength intervals ``wl_to_remove`` (list of (min, max) in nm),
+        e.g. the strong absorption bands ``prod.wl_to_remove``.
+
+        Examples
+        --------
+        .. code-block:: python
+
+           raster = prod.remove_wl_dataset(prod.raster, prod.wl_to_remove)
+        '''
         xarr_ = xds[variable].isel(x=1, y=1)
         for wls in wl_to_remove:
             wl_min, wl_max = wls
@@ -586,6 +653,17 @@ class Algo(Product):
     '''
     :py:class:`Product` with the gaseous corrections and the coarse (mega-pixel) rasters used for the
     retrievals.
+
+    Examples
+    --------
+    .. code-block:: python
+
+       prod = hgrs.Algo(l1c, xcoarsen=20, ycoarsen=20)
+       prod.pressure, prod.to3c, prod.tno2c, prod.tch4c = 973.8, 6.3e-3, 3.0e-6, 9.9e-3   # from CAMS
+       prod.apply_water_masks()
+       prod.get_coarse_masked_raster()
+       prod.get_gaseous_transmittance()     # Tg_other
+       prod.other_gas_correction()          # coarse_masked_raster.Rtoa / Tg_other
     '''
 
     def __init__(self, l1c_obj=None, xcoarsen=20, ycoarsen=20, expon=2):
@@ -633,6 +711,9 @@ class Algo(Product):
         where :math:`\tau^*` are the normalized optical thicknesses of the LUT ``abs_gas_file``,
         :math:`c` the columns ``to3c``, ``tch4c``, ``tno2c``, :math:`P` the pressure (hPa) and
         :math:`\kappa` = ``coef_abs_scat``. Result in ``abs_gas_opt_thick``.
+
+        The normalized optical thicknesses were computed with the REPTRAN parameterization
+        (Gasteiger et al., 2014) at fine spectral resolution.
         '''
         gas_lut = self.gas_lut
 
@@ -755,6 +836,13 @@ class Solver():
         :param hess_inv: inverse of the approximated Hessian :math:`(J^T J)^{-1}`
         :param resVariance: variance of the residuals :math:`s^2`
         :return: standard deviations of the parameters
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from hgrs.hgrs_kernel import Solver
+        >>> Solver().errFit(np.array([[2., 0.], [0., 0.5]]), 0.01)
+        array([0.14142136, 0.07071068])
         '''
         return np.sqrt(np.diag(hess_inv * resVariance))
 
@@ -832,6 +920,22 @@ class WaterVapor(Solver):
     :param prod: :py:class:`Algo` object, corrected for the other gases
     :param raster_name: name of the raster attribute of ``prod`` to process
     :param variable: reflectance variable
+
+    Examples
+    --------
+    .. code-block:: python
+
+       wv = hgrs.WaterVapor(prod)
+       wv.solve()
+       wv.water_vapor.tcwv          # kg m-2, on the coarse grid
+       prod.get_wv_transmittance_raster(wv.water_vapor)
+       prod.water_vapor_correction()
+
+    References
+    ----------
+    * Branch, M. A., Coleman, T. F., Li, Y. (1999). A subspace, interior, and conjugate gradient method
+      for large-scale bound-constrained minimization problems. *SIAM Journal on Scientific Computing*,
+      21(1), 1-23. https://doi.org/10.1137/S1064827595289108
     '''
 
     def __init__(self, prod,
@@ -954,6 +1058,24 @@ class Aerosol(Solver):
     :param aot550_limits: bounds of :math:`\tau_{ref}` for the optimization
     :param raster_name: name of the raster attribute of ``prod`` to process
     :param variable: reflectance variable
+
+    Examples
+    --------
+    .. code-block:: python
+
+       aero = hgrs.Aerosol(prod, aerosol_model='MACL_rh70',
+                           first_guess=[0.1, 0.], aot550_limits=[0.002, 0.5])
+       aero.solve()                       # aero.aero_img: aot_ref, brdfg on the coarse grid
+       aero.get_atmo_parameters(prod)     # smoothing + aero.atmo_img: aot, Rtoa_diff, Tdir
+       aero.atmo_img.Tdir.mean(['x', 'y']).plot()
+
+    References
+    ----------
+    * Kraft, D. (1988). *A software package for sequential quadratic programming*. Technical Report
+      DFVLR-FB 88-28, DLR German Aerospace Center, Institute for Flight Mechanics, Köln.
+    * Hess, M., Koepke, P., Schult, I. (1998). Optical properties of aerosols and clouds: the software
+      package OPAC. *Bulletin of the American Meteorological Society*, 79(5), 831-844.
+      https://doi.org/10.1175/1520-0477(1998)079<0831:OPOAAC>2.0.CO;2
     '''
 
     def __init__(self, prod,
@@ -1260,6 +1382,18 @@ def Gamma2sigma(Gamma):
     .. math::
 
        \sigma = \frac{\sqrt{2}\, \Gamma}{2 \sqrt{2 \ln 2}} = \frac{\Gamma}{2\sqrt{\ln 2}}
+
+    .. note::
+
+       This is :math:`\sqrt{2}` times the standard deviation of a Gaussian of full width at half maximum
+       :math:`\Gamma`, :math:`\Gamma / (2\sqrt{2\ln 2})` (see :py:func:`super_gaussian_fwhm2sigma`
+       with ``expon=2``).
+
+    Examples
+    --------
+    >>> from hgrs.hgrs_kernel import Gamma2sigma
+    >>> round(Gamma2sigma(10.), 4)
+    6.0056
     '''
     return Gamma * np.sqrt(2.) / (np.sqrt(2. * np.log(2.)) * 2.)
 
@@ -1271,6 +1405,12 @@ def gaussian(x, mu, sigma):
     .. math::
 
        g(x) = \frac{1}{\sigma\sqrt{2\pi}} \exp\left(-\frac{(x - \mu)^2}{2\sigma^2}\right)
+
+    Examples
+    --------
+    >>> from hgrs.hgrs_kernel import gaussian
+    >>> round(gaussian(0., 0., 1.), 4)
+    0.3989
     '''
     return 1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(-(x - mu) ** 2 / (2 * sigma ** 2))
 
@@ -1294,6 +1434,15 @@ def super_gaussian(x,
     :param sigma: width :math:`\sigma`
     :param expon: exponent :math:`p` (:math:`p = 2` for a Gaussian)
     :return: :math:`g(x)`
+
+    Examples
+    --------
+    At a distance FWHM/2 of the center, the distribution is half of its maximum:
+
+    >>> from hgrs.hgrs_kernel import super_gaussian, super_gaussian_fwhm2sigma
+    >>> sigma = super_gaussian_fwhm2sigma(10., 6.)
+    >>> round(super_gaussian(5., 1., 0., sigma, 6.) / super_gaussian(0., 1., 0., sigma, 6.), 4)
+    0.5
     '''
 
     sigma = max(1.e-15, sigma)
@@ -1314,6 +1463,14 @@ def super_gaussian_fwhm2sigma(fwhm,
     :param fwhm: full width at half maximum :math:`\Gamma`
     :param expon: exponent :math:`p` of the super-Gaussian
     :return: :math:`\sigma`
+
+    Examples
+    --------
+    >>> from hgrs.hgrs_kernel import super_gaussian_fwhm2sigma
+    >>> round(super_gaussian_fwhm2sigma(10., 2.), 4)   # Gaussian: FWHM / (2 sqrt(2 ln 2))
+    4.2466
+    >>> round(super_gaussian_fwhm2sigma(10., 6.), 4)
+    4.7351
     '''
     return fwhm / 2 * (2 * np.log(2)) ** (-1 / expon)
 
@@ -1331,6 +1488,21 @@ class Spectral():
 
     :param central_wl: numpy array of the central wavelengths
     :param fwhm: scalar or numpy array containing full width at half maximum in nm
+
+    Examples
+    --------
+    A signal varying linearly with wavelength is not changed by symmetric response functions:
+
+    >>> import numpy as np
+    >>> import xarray as xr
+    >>> from hgrs.hgrs_kernel import Spectral
+    >>> wl = np.arange(400, 801, 1.)
+    >>> signal = xr.DataArray((wl - 400) / 400, coords={'wl': wl})
+    >>> spectral = Spectral(np.array([500., 600., 700.]), fwhm=10.)
+    >>> spectral.convolve(signal).values.round(4)
+    array([0.25, 0.5 , 0.75], dtype=float32)
+    >>> spectral.convolve2(signal, expon=6).values.round(4)
+    array([0.25, 0.5 , 0.75], dtype=float32)
     '''
 
     def __init__(self,
@@ -1369,6 +1541,7 @@ class Spectral():
     ):
         '''
         Convolution assuming Dirac for signal source spectral response
+
         :paral wl_signal: wavelength array of spectral signal
         :param signal: numpy of signal to convolve, coord=wl_signal
         :param wl: numpy of wavelength coordinates of signal
@@ -1395,6 +1568,7 @@ class Spectral():
     ):
         '''
         Convolution assuming Dirac for signal source spectral response
+
         :paral wl_signal: wavelength array of spectral signal
         :param signal: numpy of signal to convolve, coord=wl_signal
         :param wl: numpy of wavelength coordinates of signal
@@ -1425,12 +1599,15 @@ class Spectral():
                   threshold=1e-4,
                   info={}):
         '''
-        Convolve with spectral response of sensor based on full width at half maximum of each band
-        :param signal: xarray spectral signal to convolve, coord=wl
-        :param fwhm: xarray with data=fwhm containing full width at half maximum in nm, and coords=wl
-        :param info: optional parameter to feed the attributes of the output xarray
+        Convolve with super-Gaussian spectral responses of the bands (full width at half maximum ``fwhm``)
+
+        :param signal: xarray spectral signal to convolve, coord=wl (other dimensions are looped over)
+        :param name: kept for compatibility, the name of ``signal`` is used
+        :param expon: exponent of the super-Gaussian (2 for a Gaussian)
         :param threshold: minimum values of the response function to be included in the convolution
-        :return:
+        :param info: not used, the attributes of ``signal`` are kept
+        :return: convolved signal on the central wavelengths of the bands (DataArray, or Dataset if
+            ``signal`` has dimensions other than wl)
         '''
 
         wl_ref = signal.wl.values
@@ -1472,11 +1649,13 @@ class Spectral():
                  name='signal',
                  info={}):
         '''
-        Convolve with spectral response of sensor based on full width at half maximum of each band
-        :param signal: xarray spectral signal to convolve, coord=wl
-        :param fwhm: xarray with data=fwhm containing full width at half maximum in nm, and coords=wl
+        Convolve with Gaussian spectral responses of the bands (full width at half maximum ``fwhm``,
+        width from :py:func:`Gamma2sigma`)
+
+        :param signal: xarray spectral signal to convolve, coord=wl (other dimensions are looped over)
+        :param name: name of the output DataArray
         :param info: optional parameter to feed the attributes of the output xarray
-        :return:
+        :return: convolved signal on the central wavelengths of the bands
         '''
 
         wl_ref = signal.wl.values
