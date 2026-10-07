@@ -47,6 +47,24 @@ class Process():
        process = Process()
        process.execute('ENMAP01-____L1C-DT0000001234_..._V010400', 'cams_2024-07.nc')
        process.write_output('ENMAP01_L2A_hgrs.nc')
+
+    See the tutorial :doc:`/tutorials/process_image` for a complete example.
+
+    References
+    ----------
+    * Harmel, T., Chami, M., Tormos, T., Reynaud, N., Danis, P.-A. (2018). Sunglint correction of the
+      Multi-Spectral Instrument (MSI)-SENTINEL-2 imagery over inland and sea waters from SWIR bands.
+      *Remote Sensing of Environment*, 204, 308-321. https://doi.org/10.1016/j.rse.2017.10.022
+    * Hess, M., Koepke, P., Schult, I. (1998). Optical properties of aerosols and clouds: the software
+      package OPAC. *Bulletin of the American Meteorological Society*, 79(5), 831-844.
+      https://doi.org/10.1175/1520-0477(1998)079<0831:OPOAAC>2.0.CO;2
+    * Wright, N., Duncan, J. M. A., Callow, J. N., Thompson, S. E., George, R. J. (2025). Training
+      sensor-agnostic deep learning models for remote sensing: achieving state-of-the-art cloud and
+      cloud shadow identification with OmniCloudMask. *Remote Sensing of Environment*, 322, 114694.
+      https://doi.org/10.1016/j.rse.2025.114694
+
+    The CAMS data are the global atmospheric composition forecasts of the Copernicus Atmosphere
+    Monitoring Service (https://ads.atmosphere.copernicus.eu/datasets/cams-global-atmospheric-composition-forecasts).
     '''
 
     def __init__(self):

@@ -17,7 +17,8 @@ class Reproj():
                    parallel=True):
         """
         Take a PRISMA L1C product in sensor geometry (x,y) as input and
-        return it in a georeferenced geometry (lon,lat).
+        return it in a georeferenced geometry (lon,lat), by bilinear interpolation with xESMF
+        (https://github.com/pangeo-data/xESMF) onto a regular longitude-latitude grid covering the image.
 
         WARNING : Due to the use of the xESMF package, relying on Fortran,
         some user warnings like : "UserWarning: Input array is not F_CONTIGUOUS.
@@ -29,6 +30,14 @@ class Reproj():
         :param d_input_crs: (int) code EPSG of the related geolocalisation frame
 
         :return output_dataset: the regularised product
+
+        Examples
+        --------
+        .. code-block:: python
+
+           from hgrs import Reproj
+
+           l1c_geo = Reproj.regridding(l1c, output_grid_size=(1200, 1200))   # done by Driver.read_prisma
         """
 
         logging.info('georeferencing native image')
@@ -82,19 +91,47 @@ class Misc:
 
         :param alt: altitude :math:`z` in meters (float or np.array)
         :param psl: pressure at sea level :math:`P_{sl}` in hPa
-        :return: pressure at the given altitude in hPa'''
+        :return: pressure at the given altitude in hPa
+
+        The constants are those of the troposphere of the U.S. Standard Atmosphere (1976): lapse rate
+        0.0065 K m\ :sup:`-1` and sea-level temperature 288.15 K.
+
+        Examples
+        --------
+        >>> from hgrs.utils import Misc
+        >>> round(float(Misc.get_pressure(500, 1013.25)), 2)
+        954.62
+        '''
 
         palt = psl * (1. - 0.0065 * np.nan_to_num(alt) / 288.15) ** 5.255
         return palt
 
     @staticmethod
     def transmittance_dir(aot, air_mass, rot=0):
-        r'''Direct transmittance :math:`T_{dir} = \exp\left[-(\tau_R + \tau_a) M\right]`'''
+        r'''Direct transmittance :math:`T_{dir} = \exp\left[-(\tau_R + \tau_a) M\right]`
+
+        :param aot: aerosol optical thickness :math:`\tau_a`
+        :param air_mass: air mass :math:`M`
+        :param rot: Rayleigh optical thickness :math:`\tau_R`
+
+        Examples
+        --------
+        >>> from hgrs.utils import Misc
+        >>> round(float(Misc.transmittance_dir(0.1, 2., rot=0.05)), 4)
+        0.7408
+        '''
         return np.exp(-(rot + aot) * air_mass)
 
     @staticmethod
     def air_mass(sza, vza):
-        r'''Two-way geometric air mass :math:`M = 1/\cos\theta_s + 1/\cos\theta_v` (angles in degrees)'''
+        r'''Two-way geometric air mass :math:`M = 1/\cos\theta_s + 1/\cos\theta_v` (angles in degrees)
+
+        Examples
+        --------
+        >>> from hgrs.utils import Misc
+        >>> round(float(Misc.air_mass(30, 10)), 4)
+        2.1701
+        '''
         return 1 / np.cos(np.radians(vza)) + 1 / np.cos(np.radians(sza))
 
     @staticmethod
@@ -110,6 +147,21 @@ class Misc:
 
         :param dayofyear: day of the year (DOY)
         :return: correction factor, multiplying the mean solar irradiance
+
+        Examples
+        --------
+        Close to the perihelion (early January) and to the aphelion (early July):
+
+        >>> from hgrs.utils import Misc
+        >>> round(float(Misc.earth_sun_correction(3)), 4)
+        1.0351
+        >>> round(float(Misc.earth_sun_correction(185)), 4)
+        0.9666
+
+        References
+        ----------
+        * Spencer, J. W. (1971). Fourier series representation of the position of the sun. *Search*, 2(5),
+          172.
         '''
         theta = 2. * np.pi * dayofyear / 365
         d2 = 1.00011 + 0.034221 * np.cos(theta) + 0.00128 * np.sin(theta) + \

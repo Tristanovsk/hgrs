@@ -252,3 +252,49 @@ Wavelength sets
      - 430, 490, 560, 650, 750, 800, 865, 1020
 
 (attributes of :py:class:`~hgrs.hgrs_kernel.Product`; the closest bands of the sensor are used).
+
+References
+----------
+
+The radiative transfer look-up tables were computed with the OSOAA code (Chami et al., 2015) for the
+OPAC aerosol models (Hess et al., 1998), the gaseous absorption with REPTRAN (Gasteiger et al., 2014),
+and the Rayleigh optical thickness follows Bodhaine et al. (1999). The SWIR sunglint correction
+derives from the GRS algorithm (Harmel et al., 2018).
+
+* Harmel, T., Chami, M., Tormos, T., Reynaud, N., Danis, P.-A. (2018). Sunglint correction of the
+  Multi-Spectral Instrument (MSI)-SENTINEL-2 imagery over inland and sea waters from SWIR bands.
+  *Remote Sensing of Environment*, 204, 308-321. https://doi.org/10.1016/j.rse.2017.10.022
+* Chami, M., Lafrance, B., Fougnie, B., Chowdhary, J., Harmel, T., Waquet, F. (2015). OSOAA: a
+  vector radiative transfer model of coupled atmosphere-ocean system for a rough sea surface
+  application to the estimates of the directional variations of the water leaving reflectance to
+  better process multi-angular satellite sensors data over the ocean. *Optics Express*, 23(21),
+  27829-27852. https://doi.org/10.1364/OE.23.027829
+* Hess, M., Koepke, P., Schult, I. (1998). Optical properties of aerosols and clouds: the software
+  package OPAC. *Bulletin of the American Meteorological Society*, 79(5), 831-844.
+  https://doi.org/10.1175/1520-0477(1998)079<0831:OPOAAC>2.0.CO;2
+* Gasteiger, J., Emde, C., Mayer, B., Buras, R., Buehler, S. A., Lemke, O. (2014). Representative
+  wavelengths absorption parameterization applied to satellite channels and spectral bands.
+  *Journal of Quantitative Spectroscopy and Radiative Transfer*, 148, 99-115.
+  https://doi.org/10.1016/j.jqsrt.2014.06.024
+* Bodhaine, B. A., Wood, N. B., Dutton, E. G., Slusser, J. R. (1999). On Rayleigh optical depth
+  calculations. *Journal of Atmospheric and Oceanic Technology*, 16(11), 1854-1861.
+  https://doi.org/10.1175/1520-0426(1999)016<1854:ORODC>2.0.CO;2
+* Coddington, O. M., Richard, E. C., Harber, D., et al. (2021). The TSIS-1 hybrid solar reference
+  spectrum. *Geophysical Research Letters*, 48(12), e2020GL091709. https://doi.org/10.1029/2020GL091709
+* Spencer, J. W. (1971). Fourier series representation of the position of the sun. *Search*, 2(5),
+  172.
+* Wright, N., Duncan, J. M. A., Callow, J. N., Thompson, S. E., George, R. J. (2025). Training
+  sensor-agnostic deep learning models for remote sensing: achieving state-of-the-art cloud and
+  cloud shadow identification with OmniCloudMask. *Remote Sensing of Environment*, 322, 114694.
+  https://doi.org/10.1016/j.rse.2025.114694
+* Kraft, D. (1988). *A software package for sequential quadratic programming*. Technical Report
+  DFVLR-FB 88-28, DLR German Aerospace Center, Institute for Flight Mechanics, Köln.
+* Branch, M. A., Coleman, T. F., Li, Y. (1999). A subspace, interior, and conjugate gradient method
+  for large-scale bound-constrained minimization problems. *SIAM Journal on Scientific Computing*,
+  21(1), 1-23. https://doi.org/10.1137/S1064827595289108
+* Cogliati, S., Sarti, F., Chiarantini, L., et al. (2021). The PRISMA imaging spectroscopy mission:
+  overview and first performance analysis. *Remote Sensing of Environment*, 262, 112499.
+  https://doi.org/10.1016/j.rse.2021.112499
+* Storch, T., Honold, H.-P., Chabrillat, S., et al. (2023). The EnMAP imaging spectroscopy mission
+  towards operations. *Remote Sensing of Environment*, 294, 113632.
+  https://doi.org/10.1016/j.rse.2023.113632
