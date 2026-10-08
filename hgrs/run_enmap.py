@@ -1,4 +1,4 @@
-''' Executable to process PRISMA L1 images for aquatic environment
+''' Executable to process EnMAP L1C images for aquatic environment
 
 Usage:
   hgrs_enmap <l1_path>  [--cams_file file] [-o <ofile>] [--odir <odir>]\
@@ -74,7 +74,7 @@ def main():
         print('File ' + outfile + ' already processed; skip!')
         sys.exit()
 
-    logging.info('call grs_process for the following paramater. File:' +
+    logging.info('call hgrs_process for the following parameters. File:' +
                  l1_path + ', output file:' + outfile +
                  f', cams_file:{cams_file}')
 

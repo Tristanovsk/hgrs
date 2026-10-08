@@ -34,6 +34,39 @@ TRANS_LUT_FILE = opj(HGRSDATA, TRANSLUT)
 
 
 class Process():
+    '''
+    hGRS processing chain: from a PRISMA or EnMAP L1 image and a CAMS file to the L2A product
+    (remote-sensing reflectance, water vapor, aerosol optical thickness and sunglint).
+
+    Example
+    -------
+    .. code-block:: python
+
+       from hgrs import Process
+
+       process = Process()
+       process.execute('ENMAP01-____L1C-DT0000001234_..._V010400', 'cams_2024-07.nc')
+       process.write_output('ENMAP01_L2A_hgrs.nc')
+
+    See the tutorial :doc:`/tutorials/process_image` for a complete example.
+
+    References
+    ----------
+    * Harmel, T., Chami, M., Tormos, T., Reynaud, N., Danis, P.-A. (2018). Sunglint correction of the
+      Multi-Spectral Instrument (MSI)-SENTINEL-2 imagery over inland and sea waters from SWIR bands.
+      *Remote Sensing of Environment*, 204, 308-321. https://doi.org/10.1016/j.rse.2017.10.022
+    * Hess, M., Koepke, P., Schult, I. (1998). Optical properties of aerosols and clouds: the software
+      package OPAC. *Bulletin of the American Meteorological Society*, 79(5), 831-844.
+      https://doi.org/10.1175/1520-0477(1998)079<0831:OPOAAC>2.0.CO;2
+    * Wright, N., Duncan, J. M. A., Callow, J. N., Thompson, S. E., George, R. J. (2025). Training
+      sensor-agnostic deep learning models for remote sensing: achieving state-of-the-art cloud and
+      cloud shadow identification with OmniCloudMask. *Remote Sensing of Environment*, 322, 114694.
+      https://doi.org/10.1016/j.rse.2025.114694
+
+    The CAMS data are the global atmospheric composition forecasts of the Copernicus Atmosphere
+    Monitoring Service (https://ads.atmosphere.copernicus.eu/datasets/cams-global-atmospheric-composition-forecasts).
+    '''
+
     def __init__(self):
         self.lut_file = opj(HGRSDATA, TOALUT)
         self.trans_lut_file = opj(HGRSDATA, TRANSLUT)
@@ -48,6 +81,47 @@ class Process():
                 img_path,
                 cams_path
                 ):
+        r'''
+        Run the processing chain. The result is stored in ``l2_prod`` (xarray.Dataset) and
+        ``successful`` is set to True.
+
+        Steps (see :py:mod:`hgrs.hgrs_kernel` for the equations):
+
+        1. **L1 image.** EnMAP L1C (``img_path`` is a directory) or PRISMA L1 + L2C for the angles
+           (``img_path`` is a list ``[l1_path, l2c_path]``), converted to TOA reflectance
+           (:py:class:`~hgrs.driver.Driver`).
+        2. **CAMS.** Surface pressure, O\ :sub:`3`, NO\ :sub:`2` and CH\ :sub:`4` columns and AOD at the
+           image center and acquisition time. The OPAC aerosol model :math:`m` whose spectral AOD is
+           closest to CAMS is selected:
+
+           .. math::
+
+              \hat m = \underset{m}{\operatorname{argmin}} \sum_{\lambda}
+              \left| \frac{\tau_{CAMS}(\lambda)}{\tau_{CAMS}(550)} - \tau_{a,m}(\lambda; \tau_{ref}=1) \right|,
+              \quad \lambda \in \{469, 550, 670, 865, 1240\}\ \text{nm}
+
+        3. **Masks.** Clouds and cloud shadows (OmniCloudMask on the 670, 550 and 940 nm bands) and
+           water pixels (:py:meth:`~hgrs.hgrs_kernel.Product.apply_water_masks`).
+        4. **Coarse raster** of 20 x 20 pixels mega-pixels.
+        5. **Gaseous absorption** (:math:`T_g`), then **water vapor** retrieval and correction
+           (:math:`T_{wv}`). The bands of strong absorption (``wl_to_remove``) and with
+           :math:`T_g T_{wv} < 0.5` are removed.
+        6. **Aerosol and sunglint** retrieval on the coarse raster, with the first guess
+           :math:`\bar\tau_{CAMS}(550)` and the bounds
+
+           .. math::
+
+              0.002 \leq \tau_{ref} \leq \bar\tau_{CAMS}(550) + 2 \max\left(s_{CAMS},\ 0.2\, \bar\tau_{CAMS}(550) + 0.05\right)
+
+           where :math:`s_{CAMS}` is the standard deviation of the CAMS AOD; the AOT is then smoothed.
+        7. **Full resolution** correction, by blocks of 256 x 256 pixels: gaseous and water vapor
+           transmittances, diffuse atmospheric reflectance, sunglint and transmittances, giving
+           :math:`R_{rs}(\lambda)`.
+
+        :param img_path: path of the EnMAP L1C directory, or list ``[l1_path, l2c_path]`` of the PRISMA
+            L1 and L2C files
+        :param cams_path: path of the CAMS NetCDF file covering the acquisition
+        '''
 
         # ---------------------------------------
         # construct L1C image plus angle rasters
@@ -448,6 +522,12 @@ class Process():
 
     def write_output(self,
                      ofile):
+        '''
+        Write ``l2_prod`` into a compressed NetCDF file (int16 with scale factors, zlib level 5), for
+        the wavelengths 400-1150 nm.
+
+        :param ofile: path of the output file (overwritten if it exists)
+        '''
         ######################################
         # Write final product
         ######################################
