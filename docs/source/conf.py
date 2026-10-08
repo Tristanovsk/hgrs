@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 # Make the package importable without installation (local builds);
-# on Read the Docs the package is also pip-installed (see .readthedocs.yaml).
+# on Read the Docs the package is not installed either (see .readthedocs.yaml).
 DOCS_SOURCE = Path(__file__).resolve().parent
 REPO_ROOT = DOCS_SOURCE.parents[1]
 sys.path.insert(0, str(REPO_ROOT))

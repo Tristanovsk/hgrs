@@ -1,10 +1,24 @@
--r ../requirements.txt
-
-# Doc
-ipython
+# Documentation build (Read the Docs)
 sphinx>=7
 sphinx-book-theme>=1.1
 sphinx-copybutton
 myst-nb>=1.0
 myst-parser
 linkify-it-py
+ipython
+
+# hGRS modules imported by autodoc (heavy ones are mocked in conf.py)
+numpy
+scipy
+pandas
+xarray
+matplotlib
+numba
+h5py
+netCDF4
+rioxarray
+pyyaml
+docopt
+tqdm
+importlib_resources
+setuptools<81  # pkg_resources is used by hgrs.auxdata and hgrs.hgrs_kernel
