@@ -18,6 +18,48 @@ from . import SolarIrradiance, Reproj, Misc, Spectral
 
 
 class Driver():
+    r'''
+    Readers of the PRISMA and EnMAP L1 products.
+
+    The TOA radiance :math:`L_{TOA}` (mW m\ :sup:`-2` sr\ :sup:`-1` nm\ :sup:`-1`) is converted into TOA
+    reflectance (``reflectance_unit=True``)
+
+    .. math::
+
+       R_{TOA}(\lambda) = \frac{\pi\, L_{TOA}(\lambda)}{F_0(\lambda)\, \cos\theta_s}
+
+    where :math:`F_0` is the TSIS-1 solar irradiance (Coddington et al., 2021) corrected for the
+    Earth-Sun distance (:py:meth:`~hgrs.utils.Misc.earth_sun_correction`) and convolved with the
+    spectral response of the bands, and :math:`\theta_s` the solar zenith angle (mean value over the
+    image for EnMAP, scene value for PRISMA).
+
+    :param satellite: ``'enmap'`` or ``'prisma'``
+
+    Examples
+    --------
+    .. code-block:: python
+
+       import hgrs
+
+       # EnMAP L1C product (directory)
+       l1c = hgrs.Driver('enmap').read_l1c_enmap('ENMAP01-____L1C-DT0000088121_..._V010502_...',
+                                                 reflectance_unit=True)
+       # PRISMA L1 + L2C (viewing angles), geoprojected onto a longitude-latitude grid
+       l1c = hgrs.Driver('prisma').read_prisma('PRS_L1_STD_OFFL_..._0001.he5', 'PRS_L2C_STD_..._0001.he5')
+       l1c.Rtoa.sel(wl=[650, 560, 480], method='nearest').plot.imshow(rgb='wl', robust=True)
+
+    References
+    ----------
+    * Coddington, O. M., Richard, E. C., Harber, D., et al. (2021). The TSIS-1 hybrid solar reference
+      spectrum. *Geophysical Research Letters*, 48(12), e2020GL091709. https://doi.org/10.1029/2020GL091709
+    * Cogliati, S., Sarti, F., Chiarantini, L., et al. (2021). The PRISMA imaging spectroscopy mission:
+      overview and first performance analysis. *Remote Sensing of Environment*, 262, 112499.
+      https://doi.org/10.1016/j.rse.2021.112499
+    * Storch, T., Honold, H.-P., Chabrillat, S., et al. (2023). The EnMAP imaging spectroscopy mission
+      towards operations. *Remote Sensing of Environment*, 294, 113632.
+      https://doi.org/10.1016/j.rse.2023.113632
+    '''
+
     def __init__(self,
                  satellite='enmap'):
 
@@ -66,10 +108,11 @@ class Driver():
                         drop_vars=False):
         '''
         Load PRISMA L1C data into xarray rasters
+
         :param l1c_path: absolute path to the .h5 prisma file
         :param reflectance_unit: to convert from TOA radiance to TOA reflectance
         :param drop_vars: if True remove the radiance raster to keep reflectance only
-        :return:
+        :return: xarray.Dataset with ``Ltoa`` and/or ``Rtoa`` (y, x, wl), ``F0``, ``fwhm``, ``lon``, ``lat``
         '''
         # =============================================================================
         # Load geolocation, solar irradiance and TOA radiance
@@ -170,8 +213,9 @@ class Driver():
                         l2c_path: str):
         '''
         Load PRISMA L2C data (including observation angles) into xarray rasters
+
         :param l2c_path: absolute path to the .h5 prisma file
-        :return:
+        :return: xarray.Dataset with the angles ``sza``, ``vza``, ``raa`` (and the other L2C variables)
         '''
 
         # =============================================================================

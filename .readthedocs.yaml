@@ -1,23 +1,19 @@
+# Read the Docs configuration file
+# https://docs.readthedocs.io/en/stable/config-file/v2.html
 version: 2
 
 build:
-  os: ubuntu-22.04
+  os: ubuntu-24.04
   tools:
-    python: "mambaforge-22.9"
+    python: "3.12"
 
 sphinx:
   configuration: docs/source/conf.py
   fail_on_warning: false
 
-formats: all
-
-conda:
-  environment: docs/environment.yml
-
+# The package is not pip-installed: conf.py puts the repository on sys.path,
+# and the heavy dependencies (omnicloudmask/torch, xesmf/ESMF, cartopy, GDAL)
+# are mocked by autodoc. The tutorials are stored executed (nb_execution_mode='off').
 python:
   install:
-    - requirements: requirements.txt
-    - method: pip
-      path: .
-      extra_requirements:
-        - docs
+    - requirements: docs/requirements.txt
