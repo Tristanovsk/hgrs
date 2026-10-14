@@ -844,10 +844,16 @@ class Solver():
         '''
         return np.sqrt(np.diag(hess_inv * resVariance))
 
-    def conv_mapping(self, x):
+    @staticmethod
+    def conv_mapping(x):
         """
-        Nan-mean convolution: mean of the non-NaN values of the window; if the central value is NaN,
-        it is replaced by the mean of its neighbors (gap filling).
+        NaN-mean convolution: function for ``scipy.ndimage.generic_filter``.
+
+        Mean of the non-NaN values of the window; if the central value is NaN, it is replaced by the mean
+        of its neighbors (gap filling); it is kept if all the neighbors are NaN.
+
+        :param x: flattened values of the footprint (the central one is ``x[len(x) // 2]``)
+        :return: filtered value
         """
         # get index of central pixel
         idx = len(x) // 2
@@ -859,28 +865,55 @@ class Solver():
             return np.nanmean(x)
 
     @staticmethod
+    def _nanmean_box(image, size):
+        '''
+        NaN-aware mean over a rectangular window, edges extended by the nearest value.
+
+        Same result as ``generic_filter(image, conv_mapping, footprint=np.ones(size), mode='nearest')``
+        (to floating point rounding: the central value is NaN or not, the mean of the valid values of the
+        window is returned, NaN if there is none), but computed with two box filters instead of a Python
+        call per pixel and per window element.
+
+        :param image: 2D array
+        :param size: window shape (rows, columns)
+        :return: filtered array, float64
+        '''
+        valid = ~np.isnan(image)
+        total = ndimage.uniform_filter(np.where(valid, image, 0.), size=size, mode='nearest')
+        count = ndimage.uniform_filter(valid.astype(np.float64), size=size, mode='nearest')
+        out = np.full(image.shape, np.nan)
+        ok = count > 0.5 / (size[0] * size[1])  # a true count is at least 1 / (window size), the rest is rounding
+        out[ok] = total[ok] / count[ok]
+        return out
+
+    @staticmethod
     @jit(nopython=True)
     def filter2d(image, weight, windows):
         r'''
-        Function to convolve parameter image with uncertainty image (weighted moving average)
+        Weighted moving average of an image (numba).
+
+        Each pixel with a positive weight is replaced by the weighted mean of its neighbours in the
+        ``windows`` window :math:`W_{ij}` centered on it (pixels with a null / NaN weight are ignored):
 
         .. math::
 
-           \tilde x_{ij} = \frac{\sum_{(k,l) \in W_{ij}} w_{kl}\, x_{kl}}{\sum_{(k,l) \in W_{ij}} w_{kl}}
+           \tilde x_{ij} = \frac{\sum_{(k,l) \in W_{ij},\, w_{kl} > 0} w_{kl}\, x_{kl}}
+           {\sum_{(k,l) \in W_{ij},\, w_{kl} > 0} w_{kl}}
 
-        computed where :math:`w_{ij} > 0`, :math:`W_{ij}` being the window centered on :math:`(i,j)`.
+        The window is truncated at the edges of the image; pixels with a null / NaN weight keep their
+        value. All the means are computed from the input values (`image` is not modified).
 
-        :param image: parameter image
-        :param weight: weight image (e.g., number of water pixels or inverse variance)
-        :param windows: size of the window for convolution
-        :return: convolved result with same shape as image
+        :param image: 2D array to smooth
+        :param weight: 2D array of weights (e.g., number of water pixels or inverse variance), same shape
+        :param windows: size of the window (rows, columns)
+        :return: smoothed copy of `image`
         '''
         M, N = np.shape(image)
         Mf, Nf = windows
         Mf2 = Mf // 2
         Nf2 = Nf // 2
         threshold = 0
-        result = image
+        result = image.copy()
         for i in range(M):
             for j in range(N):
                 num = 0.0
@@ -888,11 +921,11 @@ class Solver():
                 if weight[i, j] > threshold:
                     for ii in range(Mf):
                         ix = i - Mf2 + ii
-                        if ix < M:
+                        if 0 <= ix < M:
                             for jj in range(Nf):
 
                                 iy = j - Nf2 + jj
-                                if iy < N:
+                                if 0 <= iy < N:
                                     wgt = weight[ix, iy]
                                     if wgt > 0.:
                                         num += (wgt * image[ix, iy])
@@ -1299,7 +1332,8 @@ class Aerosol(Solver):
                   ):
         '''
         Smooth and gap-fill the retrieved ``aot_ref``: weighted moving average (:py:meth:`Solver.filter2d`)
-        followed by a NaN-mean filter over the footprint ``mask`` (:py:meth:`Solver.conv_mapping`).
+        followed by a NaN-mean filter over the footprint ``mask`` (:py:meth:`Solver.conv_mapping`, computed
+        with box filters when ``mask`` is rectangular).
         Result in ``aero_img['aot_ref_smoothed']``.
 
         :param weights: weight image (e.g., number of water pixels per mega-pixel)
@@ -1310,7 +1344,11 @@ class Aerosol(Solver):
         #weights = (1 / self.aero_img['aot_ref_std'] ** 2).__deepcopy__().to_numpy().astype(float)
         param = self.aero_img['aot_ref'].__deepcopy__().to_numpy().astype(float)
         aot_ref_smoothed = self.filter2d(param, weights, windows)
-        res = ndimage.generic_filter(aot_ref_smoothed, function=self.conv_mapping, footprint=mask, mode='nearest')
+        if np.all(mask == 1):
+            res = self._nanmean_box(aot_ref_smoothed, mask.shape)
+        else:
+            res = ndimage.generic_filter(aot_ref_smoothed, function=self.conv_mapping, footprint=mask,
+                                         mode='nearest')
 
         self.aero_img['aot_ref_smoothed'] = xr.DataArray(res, coords=dict(y=self.aero_img.y, x=self.aero_img.x))
 
