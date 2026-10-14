@@ -70,7 +70,7 @@ def wv_transmittance(Twv,air_masses,tcwvs):
             for i_fwhm in range(Nwl):
                 sig = Gamma2sigma(fwhm[i_fwhm])
                 rsr = gaussian(wl_ref, wl_sat[i_fwhm], sig)
-                Twv[i_air_mass,i_tcwv,i_fwhm] = np.trapz(Ttot * rsr,wl_ref) / np.trapz(rsr, wl_ref)
+                Twv[i_air_mass,i_tcwv,i_fwhm] = np.trapezoid(Ttot * rsr,wl_ref) / np.trapezoid(rsr, wl_ref)
 
     return Twv
 

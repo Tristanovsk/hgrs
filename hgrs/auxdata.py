@@ -16,21 +16,21 @@ import cartopy.feature as cf
 
 import datetime
 
-from pkg_resources import resource_filename
+from importlib.resources import files
 
 opj = os.path.join
 
 # ******************************************************************************************************
 dir, filename = os.path.split(__file__)
 
-thuillier_file = resource_filename(__package__, 'data/aux/ref_atlas_thuillier3.nc')
-gueymard_file = resource_filename(__package__, 'data/aux/NewGuey2003.dat')
-kurucz_file = resource_filename(__package__, 'data/aux/kurucz_0.1nm.dat')
-tsis_file = resource_filename(__package__,
-                              'data/aux/hybrid_reference_spectrum_p1nm_resolution_c2022-11-30_with_unc.nc')
+thuillier_file = str(files(__package__).joinpath('data/aux/ref_atlas_thuillier3.nc'))
+gueymard_file = str(files(__package__).joinpath('data/aux/NewGuey2003.dat'))
+kurucz_file = str(files(__package__).joinpath('data/aux/kurucz_0.1nm.dat'))
+tsis_file = str(files(__package__).joinpath(
+    'data/aux/hybrid_reference_spectrum_p1nm_resolution_c2022-11-30_with_unc.nc'))
 
-sunglint_eps_file = resource_filename(__package__, 'data/aux/mean_rglint_small_angles_vza_le_12_sza_le_60.txt')
-rayleigh_file = resource_filename(__package__, 'data/aux/rayleigh_bodhaine.txt')
+sunglint_eps_file = str(files(__package__).joinpath('data/aux/mean_rglint_small_angles_vza_le_12_sza_le_60.txt'))
+rayleigh_file = str(files(__package__).joinpath('data/aux/rayleigh_bodhaine.txt'))
 
 
 class AuxData():
@@ -218,7 +218,7 @@ class SolarIrradiance():
             sig = self.Gamma2sigma(fwhm_.values)
             rsr = self.gaussian(wl_ref, fwhm_.wl.values, sig)
 
-            F0_ = (F0 * rsr).integrate('wl') / np.trapz(rsr, wl_ref)
+            F0_ = (F0 * rsr).integrate('wl') / np.trapezoid(rsr, wl_ref)
             F0_int.append(F0_.values)
         return xr.DataArray(F0_int, name='F0',
                             coords={'wl': fwhm.wl.values},

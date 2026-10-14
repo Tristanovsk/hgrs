@@ -2,7 +2,7 @@
 
 import os, copy
 
-import importlib_resources
+from importlib.resources import files
 import yaml
 import glob
 
@@ -21,7 +21,7 @@ import hgrs
 
 opj = os.path.join
 
-configfile = importlib_resources.files(__package__).joinpath('config.yml')
+configfile = files(__package__).joinpath('config.yml')
 with open(configfile, 'r') as file:
     config = yaml.safe_load(file)
 

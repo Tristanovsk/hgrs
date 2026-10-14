@@ -221,8 +221,7 @@ algorithm [Harmel2018]_. The optimizations use the trust-region reflective metho
 '''
 
 import os
-from pkg_resources import resource_filename
-import importlib_resources
+from importlib.resources import files
 import yaml
 
 import numpy as np
@@ -247,7 +246,7 @@ from . import AuxData
 
 opj = os.path.join
 
-configfile = importlib_resources.files(__package__).joinpath('config.yml')
+configfile = files(__package__).joinpath('config.yml')
 with open(configfile, 'r') as file:
     config = yaml.safe_load(file)
 
@@ -257,8 +256,8 @@ TRANSLUT = config['path']['trans_lut']
 
 LUT_FILE = opj(HGRSDATA, TOALUT)
 TRANS_LUT_FILE = opj(HGRSDATA, TRANSLUT)
-ABS_GAS_FILE = resource_filename(__package__, 'data/lut/lut_abs_opt_thickness_normalized.nc')
-WATER_VAPOR_TRANSMITTANCE_FILE = resource_filename(__package__, 'data/lut/water_vapor_transmittance.nc')
+ABS_GAS_FILE = str(files(__package__).joinpath('data/lut/lut_abs_opt_thickness_normalized.nc'))
+WATER_VAPOR_TRANSMITTANCE_FILE = str(files(__package__).joinpath('data/lut/water_vapor_transmittance.nc'))
 
 
 class Product():
