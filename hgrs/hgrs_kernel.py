@@ -222,7 +222,6 @@ algorithm [Harmel2018]_. The optimizations use the trust-region reflective metho
 
 import os
 from importlib.resources import files
-import yaml
 
 import numpy as np
 import pandas as pd
@@ -243,13 +242,12 @@ import logging
 from omnicloudmask import predict_from_array
 
 from . import AuxData
+from .config import load_config
 
 opj = os.path.join
 logger = logging.getLogger(__name__)
 
-configfile = files(__package__).joinpath('config.yml')
-with open(configfile, 'r') as file:
-    config = yaml.safe_load(file)
+config = load_config()
 
 HGRSDATA = config['path']['data_root']
 TOALUT = config['path']['toa_lut']

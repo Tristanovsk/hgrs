@@ -2,8 +2,6 @@
 
 import os, copy
 
-from importlib.resources import files
-import yaml
 import glob
 
 from tqdm.auto import tqdm
@@ -18,13 +16,12 @@ import logging
 
 import hgrs.driver as driver
 import hgrs
+from .config import load_config
 
 opj = os.path.join
 logger = logging.getLogger(__name__)
 
-configfile = files(__package__).joinpath('config.yml')
-with open(configfile, 'r') as file:
-    config = yaml.safe_load(file)
+config = load_config()
 
 HGRSDATA = config['path']['data_root']
 TOALUT = config['path']['toa_lut']

@@ -24,11 +24,15 @@ Then, download the look-up table (LUT) files and copy them in a specific folder 
 
 [download lut](https://drive.google.com/drive/folders/1r3unjh8UYTvO87nbppqivVq_cwbVxhLk?usp=sharing)
 
-Write the path of the LUT folder in `hgrs/config.yml`, example:
+Write the path of the LUT folder in your user configuration file `~/.config/hgrs/config.yml`
+(no reinstallation needed when it changes), example:
 ```commandline
 path:
   data_root: 'path/to/lut'
 ```
+Only the keys that differ from the defaults of `hgrs/config.yml` are needed. Alternatively, set the
+`HGRS_DATA_ROOT` environment variable to the LUT folder, or `HGRS_CONFIG` to another configuration
+file. Check the configuration in use with the `hgrs_config` command.
 
 Optional dependency, if you want to use the reprojection feature for PRISMA please install xemsf:
 

@@ -42,6 +42,7 @@ dependencies = [
     "zarr",
     "numba",
     "omnicloudmask",
+    "pyyaml",
     "xesmf"
 ]
 dynamic = ["version"]
@@ -72,6 +73,7 @@ version = { attr = "hgrs.__version__" }
 [project.scripts]
 hgrs_prisma = "hgrs.run_prisma:main"
 hgrs_enmap = "hgrs.run_enmap:main"
+hgrs_config = "hgrs.config:main"
 
 [project.urls]
 Homepage = "https://github.com/Tristanovsk/hgrs"
