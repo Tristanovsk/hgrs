@@ -40,6 +40,7 @@ on the CAMS atmospheric composition.
    tutorials/process_image
    tutorials/batch_processing
    tutorials/visualization
+   tutorials/grstbx_visualization
 
 .. toctree::
    :maxdepth: 2

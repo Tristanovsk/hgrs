@@ -15,6 +15,8 @@ All notable changes to hGRS are listed here, most recent first. The format follo
   Installation and History pages, API reference, runnable examples (doctests) and references.
 - Tutorial notebooks on an EnMAP image of Lake Trasimeno: image processing, batch processing and
   visualization.
+- Tutorial notebook on the visualization of a time series of hGRS L2A products with grstbx
+  (true-colour composite, area of interest, multi-date spectra and time series, interactive viewers).
 - New hGRS logo for the light and dark modes of the documentation.
 - `docs/make.bat` to build the documentation on Windows, and `.gitattributes` to check out `.bat`
   files with CRLF line endings.
