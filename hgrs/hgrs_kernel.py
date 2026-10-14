@@ -1336,13 +1336,16 @@ class Aerosol(Solver):
         with box filters when ``mask`` is rectangular).
         Result in ``aero_img['aot_ref_smoothed']``.
 
-        :param weights: weight image (e.g., number of water pixels per mega-pixel)
-        :param windows: window of the weighted average
+        :param weights: weight image (e.g., number of water pixels per mega-pixel); mega-pixels without a
+            retrieved ``aot_ref`` (NaN) get a null weight
+        :param windows: window of the weighted average, in mega-pixels (rows, columns)
         :param mask: footprint of the NaN-mean filter
         '''
 
         #weights = (1 / self.aero_img['aot_ref_std'] ** 2).__deepcopy__().to_numpy().astype(float)
-        param = self.aero_img['aot_ref'].__deepcopy__().to_numpy().astype(float)
+        param = self.aero_img['aot_ref'].to_numpy().astype(float)
+        # a failed retrieval must not spread NaN into the weighted mean of its neighbours
+        weights = np.where(np.isnan(param), 0., weights)
         aot_ref_smoothed = self.filter2d(param, weights, windows)
         if np.all(mask == 1):
             res = self._nanmean_box(aot_ref_smoothed, mask.shape)
@@ -1360,13 +1363,15 @@ class Aerosol(Solver):
                                                      method='linear', kwargs={"fill_value": "extrapolate"})
 
     def get_atmo_parameters(self,
-                            prod):
+                            prod,
+                            windows=np.array([1, 1])):
         r'''
         Rasters of the atmospheric parameters for the smoothed :math:`\tau_{ref}` (rounded to 0.001):
         spectral AOT ``aot``, diffuse reflectance ``Rtoa_diff`` and direct transmittance ``Tdir``.
         Result in ``atmo_img``.
 
         :param prod: :py:class:`Algo` object
+        :param windows: window of the weighted average of :py:meth:`smoothing`, in mega-pixels
         '''
 
         wl = prod.coarse_masked_raster.wl
@@ -1374,7 +1379,7 @@ class Aerosol(Solver):
 
         # get LUT for desired wavelengths
         self.prepare_lut(wl)
-        self.smoothing(weights)
+        self.smoothing(weights, windows=windows)
         self.get_aot_full_resolution()
 
         # construct aot raster

@@ -77,7 +77,8 @@ class Process():
 
     def execute(self,
                 img_path,
-                cams_path
+                cams_path,
+                aot_smoothing_blocks=3
                 ):
         r'''
         Run the processing chain. The result is stored in ``l2_prod`` (xarray.Dataset) and
@@ -111,7 +112,9 @@ class Process():
 
               0.002 \leq \tau_{ref} \leq \bar\tau_{CAMS}(550) + 2 \max\left(s_{CAMS},\ 0.2\, \bar\tau_{CAMS}(550) + 0.05\right)
 
-           where :math:`s_{CAMS}` is the standard deviation of the CAMS AOD; the AOT is then smoothed.
+           where :math:`s_{CAMS}` is the standard deviation of the CAMS AOD. The AOT is then smoothed: mean
+           over ``aot_smoothing_blocks`` x ``aot_smoothing_blocks`` mega-pixels weighted by their number of
+           water pixels, then NaN-mean over 3 x 3 mega-pixels to fill the gaps.
         7. **Full resolution** correction, by blocks of 256 x 256 pixels: gaseous and water vapor
            transmittances, diffuse atmospheric reflectance, sunglint and transmittances, giving
            :math:`R_{rs}(\lambda)`.
@@ -119,6 +122,9 @@ class Process():
         :param img_path: path of the EnMAP L1C directory, or list ``[l1_path, l2c_path]`` of the PRISMA
             L1 and L2C files
         :param cams_path: path of the CAMS NetCDF file covering the acquisition
+        :param aot_smoothing_blocks: size, in mega-pixels of the coarse raster (one AOT retrieval each), of
+            the window of the weighted mean of the AOT (3: each mega-pixel is averaged with its neighbours;
+            1: no smoothing)
         '''
 
         # ---------------------------------------
@@ -280,45 +286,9 @@ class Process():
                                       aot550_limits=[aot550_min,
                                                      aod550_mean + 2 * aod550_std])
         aero_retrieval.solve()
-        aero_retrieval.prepare_lut(prod.coarse_masked_raster.wl)
-        weights = prod.coarse_masked_raster['water_pixel_number'].__deepcopy__().to_numpy().astype(float)
-        aero_retrieval.smoothing(weights)
-
-        # self.aero_img['aot_ref_smoothed']=self.aero_img['aot_ref_smoothed']*0.5
-        # construct aot raster
-        # with full res
-        # aot_ref_vals = self.aot_ref_full.round(3)
-        # with coarse res
-
-        aot_ref_vals = aero_retrieval.aero_img['aot_ref_smoothed'].round(3)
-
-        aot_refs = np.unique(aot_ref_vals)
-        aot_refs = aot_refs[~np.isnan(aot_refs)]
-        # TODO update LUT for aot< 0.001
-        aot_refs[aot_refs < 0.002] = 0.002
-        # if rounded aot_ref has unique value
-        if len(aot_refs) == 1:
-            aot_refs = np.concatenate([aot_refs, 1.2 * aot_refs])
-        print(aot_refs)
-        aots = aero_retrieval.aot_lut.interp(aot_ref=aot_refs, method='linear')
-        aots = aots.interp(aot_ref=aot_ref_vals, method='nearest')
-
-        aots.name = 'aot'
-        aots.attrs['description'] = 'spectral aerosol optical thickness'
-
-        # construct raster for diffuse atmospheric reflectance
-        # TODO check quadratic interpolation (should be much better)
-        Rdiffs = aero_retrieval.Rtoa_lut.interp(aot_ref=aot_refs, method='linear')
-        Rdiffs = Rdiffs.interp(aot_ref=aot_ref_vals, method='nearest')
-        Rdiffs.name = 'Rtoa_diff'
-        Rdiffs.attrs['description'] = 'top-of-atmosphere atmosphere reflectance'
-
-        # construct raster for direct transmittance due to rayleigh and aerosol
-        Tdirs = aero_retrieval.transmittance_dir(aots, aero_retrieval.air_mass, rot=aero_retrieval.rot)
-        Tdirs.name = 'Tdir'
-        Tdirs.attrs['description'] = 'direct transmittance due to rayleigh and aerosol for total air mass'
-
-        aero_retrieval.get_atmo_parameters(prod)
+        # smoothing of aot_ref over aot_smoothing_blocks x aot_smoothing_blocks mega-pixels, then
+        # atmospheric parameters (aot, Rtoa_diff, Tdir) on the coarse grid
+        aero_retrieval.get_atmo_parameters(prod, windows=np.array([aot_smoothing_blocks, aot_smoothing_blocks]))
         self.aero_retrieval = aero_retrieval
 
         # ------------------------------------------

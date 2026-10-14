@@ -20,6 +20,13 @@ All notable changes to hGRS are listed here, most recent first. The format follo
   files with CRLF line endings.
 
 ### Changed
+- AOT smoothing scales with the retrieval mega-pixels (new `aot_smoothing_blocks` parameter of
+  `Process.execute`, default 3): mean of the AOT over 3 x 3 mega-pixels weighted by their number of
+  water pixels, instead of no weighted smoothing (window of 1 x 1); use `aot_smoothing_blocks=1` to
+  get the previous behaviour. Mega-pixels without a retrieved AOT get a null weight.
+- The NaN-mean gap filling of the AOT uses two box filters instead of a Python call per pixel.
+- `Process.execute` no longer computes the AOT and atmospheric rasters twice (once in `execute`,
+  once in `Aerosol.get_atmo_parameters`).
 - Each module logs through its own logger (`logging.getLogger(__name__)`); importing `hgrs` no
   longer changes the level of the root logger. The `hgrs_prisma` and `hgrs_enmap` commands still
   print INFO messages; in scripts and notebooks, call `logging.basicConfig(level=logging.INFO)` to
@@ -29,6 +36,8 @@ All notable changes to hGRS are listed here, most recent first. The format follo
 - The development notebooks are no longer tracked.
 
 ### Fixed
+- `filter2d`: the window wrapped around the edges of the image and the mean was computed in place,
+  from already smoothed neighbours.
 - Replace the deprecated `pkg_resources.resource_filename` by `importlib.resources` and `np.trapz`
   by `np.trapezoid` (NumPy 2).
 - Log messages of `run_enmap` and `run_prisma` refer to `hgrs_process` instead of `grs_process`.
