@@ -245,6 +245,7 @@ from omnicloudmask import predict_from_array
 from . import AuxData
 
 opj = os.path.join
+logger = logging.getLogger(__name__)
 
 configfile = files(__package__).joinpath('config.yml')
 with open(configfile, 'r') as file:
@@ -379,7 +380,7 @@ class Product():
         # ---------------------------------------
         # Load pre-computed radiative transfer LUT
         # ---------------------------------------
-        logging.info('Load pre-computed radiative transfer LUT')
+        logger.info('Load pre-computed radiative transfer LUT')
 
         # get LUT
         self.gas_lut = xr.open_dataset(self.abs_gas_file)

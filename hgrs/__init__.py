@@ -22,8 +22,5 @@ from .driver import Driver
 
 import logging
 
-#init logger
-logger = logging.getLogger()
-
-level = logging.getLevelName("INFO")
-logger.setLevel(level)
+# package logger: the level and handlers are left to the calling application
+logging.getLogger(__name__).addHandler(logging.NullHandler())

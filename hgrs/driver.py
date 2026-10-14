@@ -15,6 +15,7 @@ import datetime as dt
 import logging
 
 from . import SolarIrradiance, Reproj, Misc, Spectral
+logger = logging.getLogger(__name__)
 
 
 class Driver():
@@ -70,7 +71,7 @@ class Driver():
         elif 'enmap' in satellite:
             self.driver = self.read_l1c_enmap
         else:
-            logging.info('satellite mission not recognized, stop')
+            logger.info('satellite mission not recognized, stop')
             return
 
     def read_prisma(self,
@@ -81,14 +82,14 @@ class Driver():
                     geoproject=True,
                     parallel=False
                     ):
-        logging.info('construct L1C image plus angle rasters')
+        logger.info('construct L1C image plus angle rasters')
         try:
             dc_l1c = self.read_l1c_prisma(l1c_path,
                                           reflectance_unit=reflectance_unit,
                                           drop_vars=drop_vars)
             dc_l2c = self.read_l2c_prisma(l2c_path)
         except:
-            logging.info('input file format not recognized, stop')
+            logger.info('input file format not recognized, stop')
             return
 
         for param in ['sza', 'vza', 'raa']:

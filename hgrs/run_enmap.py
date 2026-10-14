@@ -39,8 +39,11 @@ from osgeo import gdal
 from . import __package__, __version__
 from .hgrs_process import Process
 
+logger = logging.getLogger(__name__)
+
 
 def main():
+    logging.basicConfig(level=logging.INFO)
     args = docopt(__doc__, version=__package__ + '_' + __version__)
     print(args)
     version = 'V' + __version__
@@ -74,9 +77,9 @@ def main():
         print('File ' + outfile + ' already processed; skip!')
         sys.exit()
 
-    logging.info('call hgrs_process for the following parameters. File:' +
-                 l1_path + ', output file:' + outfile +
-                 f', cams_file:{cams_file}')
+    logger.info('call hgrs_process for the following parameters. File:' +
+                l1_path + ', output file:' + outfile +
+                f', cams_file:{cams_file}')
 
     process_ = Process()
     process_.execute(l1_path,

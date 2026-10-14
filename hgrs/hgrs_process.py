@@ -20,6 +20,7 @@ import hgrs.driver as driver
 import hgrs
 
 opj = os.path.join
+logger = logging.getLogger(__name__)
 
 configfile = files(__package__).joinpath('config.yml')
 with open(configfile, 'r') as file:
@@ -126,21 +127,21 @@ class Process():
         # ---------------------------------------
         # construct L1C image plus angle rasters
         # ---------------------------------------
-        logging.info('construct L1C image plus angle rasters')
+        logger.info('construct L1C image plus angle rasters')
         # action = 'load L1C image plus angle rasters'
         # pbar = tqdm(total=len(action),
         #             desc=action + f": {img_path} ")
         if isinstance(img_path, str):
-            logging.info('Opening EnMAP image')
+            logger.info('Opening EnMAP image')
 
             try:
                 driver = hgrs.Driver('enmap')
                 l1_prod = driver.read_l1c_enmap(img_path, reflectance_unit=True)
             except:
-                logging.info('input file format not recognized, stop')
+                logger.info('input file format not recognized, stop')
                 return
         else:
-            logging.info('Opening PRISMA image')
+            logger.info('Opening PRISMA image')
             print(img_path)
             try:
                 driver = hgrs.Driver('prisma')
@@ -150,7 +151,7 @@ class Process():
                                              reflectance_unit=True,
                                              drop_vars=True)
             except:
-                logging.info('input file format not recognized, stop')
+                logger.info('input file format not recognized, stop')
                 return
 
         # get L1C object
@@ -164,14 +165,14 @@ class Process():
         # -----------------------------------------
         # Create hGRS object
         # -----------------------------------------
-        logging.info('Create hGRS object')
+        logger.info('Create hGRS object')
         prod = hgrs.Algo(l1_prod, xcoarsen=20, ycoarsen=20)
         prod.round_angles()
 
         # -----------------------------------------
         # get CAMS and set atmospheric parameters
         # -----------------------------------------
-        logging.info('get CAMS and set atmospheric parameters')
+        logger.info('get CAMS and set atmospheric parameters')
         # lazy loading
         cams = xr.open_dataset(cams_path, decode_cf=True,
                                chunks={'time': 1, 'x': 500, 'y': 500})
@@ -206,7 +207,7 @@ class Process():
         lut_aod = prod.aero_lut.aot.sel(aot_ref=1).interp(wl=cams_aod.wl)
         idx = np.abs((cams_aod / cams.aod550) - lut_aod).sum('wl').argmin()
         opac_model = prod.aero_lut.model.values[idx]
-        logging.info('OPAC model: ' + opac_model)
+        logger.info('OPAC model: ' + opac_model)
 
         # set gases and pressure
         prod.pressure = float(cams.sp) * 1e-2
@@ -219,7 +220,7 @@ class Process():
         # -----------------------------------------
 
         # TODO put omnimask settins (bands) in config.yml
-        logging.info('Apply omnicloudmask')
+        logger.info('Apply omnicloudmask')
         red_index = 670
         green_index = 550
         nir_index = 940
@@ -227,38 +228,38 @@ class Process():
         omnimask = prod.get_omnicloudmask(rgnir)
         prod.raster['Rtoa'] = prod.raster['Rtoa'].where(omnimask == 0)
 
-        logging.info('Apply water masking')
+        logger.info('Apply water masking')
         prod.apply_water_masks()
 
         # -----------------------------------------
         # Construct coarse resolution raster
         # -----------------------------------------
-        logging.info('Construct coarse resolution raster')
+        logger.info('Construct coarse resolution raster')
         prod.get_coarse_masked_raster()
         # prod.plot_water_pix_number()
 
         # -----------------------------------------
         # Correct for gaseous absorption
         # -----------------------------------------
-        logging.info('Correct for gaseous absorption')
+        logger.info('Correct for gaseous absorption')
         prod.get_gaseous_transmittance()
         prod.other_gas_correction()
 
         # ------------------------------------------
         # water vapor retrieval and correction
         # ------------------------------------------
-        logging.info('water vapor retrieval and correction')
+        logger.info('water vapor retrieval and correction')
         wv_retrieval = hgrs.WaterVapor(prod)
         wv_retrieval.solve()
         prod.get_wv_transmittance_raster(wv_retrieval.water_vapor)
         prod.water_vapor_correction()
-        logging.info('mask bands where gaseous abs. is too strong')
+        logger.info('mask bands where gaseous abs. is too strong')
         Tg_tot = prod.Tg_other * prod.Twv_raster.mean(['x', 'y'])
 
         # ------------------------------------------
         # aerosol retrieval
         # ------------------------------------------
-        logging.info('aerosol retrieval')
+        logger.info('aerosol retrieval')
 
         variable = 'Rtoa'
         # prod.coarse_masked_raster = prod.remove_wl_dataset(
@@ -326,7 +327,7 @@ class Process():
         # ------------------------------------------
         # full resolution processing
         # ------------------------------------------
-        logging.info('process full resolution')
+        logger.info('process full resolution')
 
         prod.raster = prod.remove_wl_dataset(prod.raster, prod.wl_to_remove)
         prod.other_gas_correction(raster_name='raster', variable='Rtoa')
@@ -412,7 +413,7 @@ class Process():
         # -----------------------------
         # construct output image
         # -----------------------------
-        logging.info('construct final product')
+        logger.info('construct final product')
 
         # -----------------------------
         # data
@@ -531,7 +532,7 @@ class Process():
         ######################################
         # Write final product
         ######################################
-        logging.info('export final product into netcdf')
+        logger.info('export final product into netcdf')
         complevel = 5
         encoding = {
             'Rrs': {'dtype': 'int16', 'scale_factor': 0.00001, 'add_offset': .2, '_FillValue': -32768, "zlib": True,

@@ -6,6 +6,8 @@ import xarray as xr
 import xesmf as xe
 import logging
 
+logger = logging.getLogger(__name__)
+
 class Reproj():
     def __init__(self):
         pass
@@ -40,7 +42,7 @@ class Reproj():
            l1c_geo = Reproj.regridding(l1c, output_grid_size=(1200, 1200))   # done by Driver.read_prisma
         """
 
-        logging.info('georeferencing native image')
+        logger.info('georeferencing native image')
         # setting lon and lat as coordinates
         attrs = input_dataset.attrs
         #input_dataset = input_dataset.set_coords(["lon", "lat"])
