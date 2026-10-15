@@ -12,6 +12,7 @@ import xarray as xr
 
 import datetime as dt
 import logging
+from multiprocessing import Pool
 
 import hgrs
 from hgrs.drivers import get_driver, driver_for_platform
@@ -133,6 +134,18 @@ class Process():
 
         # check the LUTs before the (long) reading of the image
         get_app_config().check_luts()
+
+        # one pool for the retrievals, started before reading the image: forking the process is
+        # faster while it is small
+        with Pool() as pool:
+            self._execute(img_path, cams_path, pool, sensor=sensor, geoproject=geoproject,
+                          sun_azimuth=sun_azimuth, sun_elevation=sun_elevation,
+                          satellite_inclination=satellite_inclination, look_angle=look_angle,
+                          view_azimuth=view_azimuth, view_zenith=view_zenith, ortho=ortho)
+
+    def _execute(self, img_path, cams_path, pool, *, sensor, geoproject, sun_azimuth, sun_elevation,
+                 satellite_inclination, look_angle, view_azimuth, view_zenith, ortho):
+        '''Body of :py:meth:`execute`, with the pool of the retrievals.'''
 
         # ---------------------------------------
         # construct L1C image plus angle rasters
@@ -281,7 +294,7 @@ class Process():
         # ------------------------------------------
         logger.info('water vapor retrieval and correction')
         wv_retrieval = hgrs.WaterVapor(prod)
-        wv_retrieval.solve()
+        wv_retrieval.solve(pool=pool)
         prod.get_wv_transmittance_raster(wv_retrieval.water_vapor)
         prod.water_vapor_correction()
         logger.info('mask bands where gaseous abs. is too strong')
@@ -305,7 +318,7 @@ class Process():
         aerosol_state = prod.aerosol_parameters
         self.aerosol_parameters = aerosol_state
         aero_retrieval = hgrs.Aerosol(prod)
-        aero_retrieval.solve()
+        aero_retrieval.solve(pool=pool)
         aero_retrieval.get_atmo_parameters(prod)
         self.aero_retrieval = aero_retrieval
 

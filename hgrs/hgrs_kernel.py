@@ -231,7 +231,6 @@ from scipy import ndimage
 import matplotlib.pyplot as plt
 
 from multiprocessing import Pool  # Process pool
-from multiprocessing import sharedctypes
 import itertools
 from scipy.optimize import least_squares, minimize
 from numba import njit, prange
@@ -916,7 +915,41 @@ class Solver():
         w = (value - grid[i]) / (grid[i + 1] - grid[i])
         return (1 - w) * table[i] + w * table[i + 1]
 
-    def errFit(self, hess_inv, resVariance):
+    @staticmethod
+    def fit_blocks(fit_block, spectra, n_water_pixels, fit, n_out, block_size, pool=None):
+        r'''
+        Run ``fit_block`` on the blocks of ``block_size`` x ``block_size`` mega-pixels, in ``pool``.
+
+        The workers receive the data of their block and the arrays of ``fit``, so that one pool,
+        started before the image is read, can run all the retrievals.
+
+        :param fit_block: module-level function of a task ``(spectra, n_water_pixels, fit)``,
+            returning an array (x, y, ``n_out``)
+        :param spectra: array (wl, y, x)
+        :param n_water_pixels: array (y, x) of the number of water pixels, or None
+        :param fit: dict of the fit parameters and LUTs
+        :param n_out: number of values per mega-pixel
+        :param block_size: size of the blocks
+        :param pool: :py:class:`multiprocessing.pool.Pool`; default: a new pool
+        :return: array (x, y, ``n_out``), NaN where no fit
+        '''
+        nwl, height, width = spectra.shape
+        blocks = [(slice(ix, ix + block_size), slice(iy, iy + block_size))
+                  for ix, iy in itertools.product(range(0, width, block_size), range(0, height, block_size))]
+        tasks = [(spectra[:, ys, xs], None if n_water_pixels is None else n_water_pixels[ys, xs], fit)
+                 for xs, ys in blocks]
+        if pool is None:
+            with Pool() as new_pool:
+                results = new_pool.map(fit_block, tasks)
+        else:
+            results = pool.map(fit_block, tasks)
+        result = np.full((width, height, n_out), np.nan)
+        for (xs, ys), block_result in zip(blocks, results):
+            result[xs, ys] = block_result
+        return result
+
+    @staticmethod
+    def errFit(hess_inv, resVariance):
         r'''
         Error/uncertainty of the estimated parameters
 
@@ -1055,6 +1088,144 @@ class Solver():
         return result
 
 
+# pool workers of the retrievals (module level, to be run by a pool started before the retrievals)
+
+def _water_vapor_residuals(x, tcwv_grid, Twv_table, wl, y):
+    r'''Residuals of :py:meth:`WaterVapor.func` on the numpy LUT'''
+    tcwv, a, b = x
+    return Solver.interp_linear(tcwv_grid, Twv_table, tcwv) * (a * wl + b) - y
+
+
+def _fit_water_vapor_block(task):
+    r'''Water vapor fit (:py:meth:`WaterVapor.solve`) of the mega-pixels of a block: array (x, y, 6)'''
+    spectra, n_water_pixels, fit = task
+    nwl, height, width = spectra.shape
+    n_param = len(fit['x0'])
+    result = np.full((width, height, 6), np.nan)
+    for ix in range(width):
+        for iy in range(height):
+            if n_water_pixels is not None and n_water_pixels[iy, ix] < fit['pixel_threshold']:
+                continue
+            y = spectra[:, iy, ix]
+            valid = ~np.isnan(y)
+            # the residual variance needs more bands than parameters
+            if valid.sum() <= n_param:
+                continue
+            y = y[valid]
+            # TODO put solver parameter in the configuration
+            res_lsq = least_squares(_water_vapor_residuals, fit['x0'],
+                                    args=(fit['tcwv_grid'], fit['Twv_table'][:, valid], fit['wl'][valid], y),
+                                    bounds=([0, -10, 0], [60, 1, 1]),
+                                    diff_step=1e-2, xtol=1e-2, ftol=1e-2, max_nfev=20)
+            xres = res_lsq.x
+            resVariance = (res_lsq.fun ** 2).sum() / (len(res_lsq.fun) - len(res_lsq.x))
+            hess = np.matmul(res_lsq.jac.T, res_lsq.jac)
+            try:
+                hess_inv = np.linalg.inv(hess)
+                std = Solver.errFit(hess_inv, resVariance)
+            except np.linalg.LinAlgError:
+                std = [np.nan, np.nan, np.nan]
+            result[ix, iy, :] = [*xres, *std]
+    return result
+
+
+def _nearest_bands(wl, valid, wl_target):
+    r'''Positions in ``wl`` of the valid bands nearest to ``wl_target`` (as ``sel(method='nearest')``
+    after ``dropna``)'''
+    valid_idx = np.flatnonzero(valid)
+    return valid_idx[pd.Index(wl[valid_idx]).get_indexer(wl_target, method='nearest')]
+
+
+def _fit_aerosol_block(task):
+    r'''Aerosol and sunglint fit (:py:meth:`Aerosol.solve`) of the mega-pixels of a block: array (x, y, 4)'''
+    spectra, n_water_pixels, fit = task
+    nwl, height, width = spectra.shape
+    model = fit['model']
+    wl = fit['wl']
+    all_valid = np.ones(nwl, dtype=bool)
+    idx_atmo_all = _nearest_bands(wl, all_valid, fit['wl_atmo'])
+    idx_non_neg_all = _nearest_bands(wl, all_valid, fit['wl_non_neg'])
+    result = np.full((width, height, 4), np.nan)
+    x0 = fit['x0']
+    for ix in range(width):
+        for iy in range(height):
+            if n_water_pixels is not None and n_water_pixels[iy, ix] < fit['pixel_threshold']:
+                continue
+            yfull = spectra[:, iy, ix]
+            valid = ~np.isnan(yfull)
+            # Pixels can pass the coarse water-count threshold while
+            # still having no valid spectrum after masking: leave this
+            # pixel's preinitialized retrieval values NaN.
+            if not valid.any():
+                continue
+            if valid.all():
+                idx_atmo, idx_non_neg = idx_atmo_all, idx_non_neg_all
+            else:
+                idx_atmo = _nearest_bands(wl, valid, fit['wl_atmo'])
+                idx_non_neg = _nearest_bands(wl, valid, fit['wl_non_neg'])
+
+            cons = ({'type': 'ineq',
+                     'fun': model.constraint,
+                     'args': (idx_non_neg, yfull[idx_non_neg])
+                     })
+            min_res = minimize(model.cost, x0,
+                               args=(idx_atmo, yfull[idx_atmo]),
+                               method='SLSQP',
+                               bounds=fit['bounds'],
+                               constraints=cons, options=fit['options']
+                               )
+            xres = min_res.x
+            if min_res.success and fit['warm_start']:
+                x0 = xres
+
+            std = [min_res.fun, np.sum(min_res.jac ** 2)]
+            result[ix, iy, :] = [*xres, *std]
+    return result
+
+
+class AerosolModel():
+    r'''
+    TOA reflectance of a black water body of :py:meth:`Aerosol.toa_simu`, on numpy LUTs (for the fit in
+    the pool workers; built by :py:meth:`Aerosol.prepare_lut`).
+
+    :param aot_grid, aot_table: :math:`\tau_a(\lambda; \tau_{ref})`, array (aot_ref, wl) on ``aot_grid``
+    :param Rdiff_grid, Rdiff_table: :math:`R_{diff}(\lambda; \tau_{ref})`, array (aot_ref, wl)
+    :param rot: Rayleigh optical thickness :math:`\tau_R(\lambda) P/P_0`
+    :param sunglint_eps: spectral shape of the sunglint :math:`\varepsilon(\lambda)`
+    :param sunglint_idx: positions of the wavelengths of the sunglint normalization
+    :param air_mass: air mass :math:`M`
+    '''
+
+    def __init__(self, aot_grid, aot_table, Rdiff_grid, Rdiff_table, rot, sunglint_eps, sunglint_idx, air_mass):
+        self.aot_grid = aot_grid
+        self.aot_table = aot_table
+        self.Rdiff_grid = Rdiff_grid
+        self.Rdiff_table = Rdiff_table
+        self.rot = rot
+        self.sunglint_eps = sunglint_eps
+        self.sunglint_idx = sunglint_idx
+        self.air_mass = air_mass
+
+    def simulate(self, aot_ref, BRDFg):
+        r'''Simulated reflectance at all the wavelengths of the LUTs'''
+        aot = Solver.interp_linear(self.aot_grid, self.aot_table, aot_ref)
+        Rdiff = Solver.interp_linear(self.Rdiff_grid, self.Rdiff_table, aot_ref)
+        sunglint_corr = np.exp(-(self.rot + aot) * self.air_mass) * self.sunglint_eps
+        return Rdiff + sunglint_corr * BRDFg / sunglint_corr[self.sunglint_idx].mean()
+
+    def residuals(self, x, idx, y):
+        r'''Residuals :math:`R(\lambda) - R_{sim}(\lambda; \tau_{ref}, B)` at the wavelengths of ``idx``'''
+        return y - self.simulate(*x)[idx]
+
+    def cost(self, x, idx, y):
+        r''':py:meth:`Aerosol.cost_func` with :py:meth:`residuals`'''
+        return np.sum(self.residuals(x, idx, y) ** 2)
+
+    def constraint(self, x, idx, y):
+        r''':py:meth:`Aerosol.constraint` with :py:meth:`residuals`'''
+        return np.min(self.residuals(x, idx, y))
+
+
 class WaterVapor(Solver):
     r'''
     Retrieval of the total column water vapor :math:`W` on the coarse raster.
@@ -1148,77 +1319,28 @@ class WaterVapor(Solver):
     def func2(self, x, Twv, wl, y):
         return self.toa_simu2(wl, Twv, *x) - y
 
-    def solve(self, x0=None):
+    def solve(self, x0=None, pool=None):
         r'''
         Run the fit on every mega-pixel with enough water pixels (parallel processing of blocks of
         ``block_size`` mega-pixels). Result in ``water_vapor`` (``tcwv``, ``tcwv_std``).
 
         :param x0: first guess of :math:`(W, a, b)`; default: ``first_guess`` of the configuration
+        :param pool: :py:class:`multiprocessing.pool.Pool` to run the fits; default: a new pool
         '''
         if x0 is None:
             x0 = self.parameters.first_guess
 
-        result = np.ctypeslib.as_ctypes(np.full((self.width, self.height, 6), np.nan))
-        shared_array = sharedctypes.RawArray(result._type_, result)
         self.x0 = x0
-        data = self.data
-        height = self.height
-        width = self.width
-        block_size = self.prod.block_size
-        pixel_threshold = self.prod.pixel_threshold
         if list(self.raster.keys()).__contains__('water_pixel_number'):
             water_pixel_number = self.raster.water_pixel_number.transpose('y', 'x').values
         else:
             water_pixel_number = None
         # numpy arrays: xarray indexing of each mega-pixel costs more than its fit
-        spectra = np.asarray(data.transpose('wl', 'y', 'x').values)
-        Twv_table = self.Twv_table
-        wl_mic = self.wl_mic
-        n_param = len(x0)
-
-        global chunk_process
-
-        def chunk_process(args):
-
-            window_x, window_y = args
-
-            tmp = np.ctypeslib.as_array(shared_array)
-            # x0 = [20, -0.04, 0.1]
-            for ix in range(window_x, min(width, window_x + block_size)):
-                for iy in range(window_y, min(height, window_y + block_size)):
-                    if water_pixel_number is not None:
-                        if water_pixel_number[iy, ix] < pixel_threshold:
-                            continue
-
-                    y = spectra[:, iy, ix]
-                    valid = ~np.isnan(y)
-                    # the residual variance needs more bands than parameters
-                    if valid.sum() <= n_param:
-                        continue
-                    y = y[valid]
-                    # sigma = Rtoa_std.isel(x=ix,y=iy).dropna(dim='wl')
-                    # TODO put solver parameter in self instance
-                    res_lsq = least_squares(self.func, self.x0, args=(Twv_table[:, valid], wl_mic[valid], y),
-                                            bounds=([0, -10, 0], [60, 1, 1]),
-                                            diff_step=1e-2, xtol=1e-2, ftol=1e-2, max_nfev=20)
-                    xres = res_lsq.x
-                    resVariance = (res_lsq.fun ** 2).sum() / (len(res_lsq.fun) - len(res_lsq.x))
-                    hess = np.matmul(res_lsq.jac.T, res_lsq.jac)
-                    try:
-                        hess_inv = np.linalg.inv(hess)
-                        std = self.errFit(hess_inv, resVariance)
-                    except:
-                        std = [np.nan, np.nan, np.nan]
-                    tmp[ix, iy, :] = [*xres, *std]
-            return
-
-        window_idxs = [(i, j) for i, j in
-                       itertools.product(range(0, width, block_size),
-                                         range(0, height, block_size))]
-
-        p = Pool()
-        res = p.map(chunk_process, window_idxs)
-        result = np.ctypeslib.as_array(shared_array)
+        spectra = np.asarray(self.data.transpose('wl', 'y', 'x').values)
+        fit = dict(x0=x0, tcwv_grid=self.tcwv_grid, Twv_table=self.Twv_table, wl=self.wl_mic,
+                   pixel_threshold=self.prod.pixel_threshold)
+        result = self.fit_blocks(_fit_water_vapor_block, spectra, water_pixel_number, fit, 6,
+                                 self.prod.block_size, pool)
         self.result = result
         self.water_vapor = xr.Dataset(dict(tcwv=(["y", "x"], result[:, :, 0].T),
                                            tcwv_std=(["y", "x"], result[:, :, 3].T)),
@@ -1399,41 +1521,24 @@ class Aerosol(Solver):
             .dropna('aot_ref') / np.cos(np.radians(sza))
         )
 
-        # numpy copies of the LUTs for the fit (simulate): with xarray at each evaluation of the cost
-        # function and of the constraint, the fit is much slower
-        self.aot_grid = self.aot_lut.aot_ref.values
-        self.aot_table = self.aot_lut.transpose('aot_ref', 'wl').values
-        self.Rdiff_grid = self.Rtoa_lut.aot_ref.values
-        self.Rdiff_table = self.Rtoa_lut.transpose('aot_ref', 'wl').values
-        self.rot_values = self.rot.values
-        self.sunglint_eps_values = self.sunglint_eps.values
+        # numpy LUTs for the fit: with xarray at each evaluation of the cost function and of the
+        # constraint, the fit is ~80x slower
         # positions of the wavelengths selected by wl_sunglint (slice or list), as in toa_simu
-        self.sunglint_idx = xr.DataArray(np.arange(len(wl)), coords={'wl': self.sunglint_eps.wl}).sel(
+        sunglint_idx = xr.DataArray(np.arange(len(wl)), coords={'wl': self.sunglint_eps.wl}).sel(
             wl=self.wl_sunglint).values
+        self.model = AerosolModel(
+            self.aot_lut.aot_ref.values, self.aot_lut.transpose('aot_ref', 'wl').values,
+            self.Rtoa_lut.aot_ref.values, self.Rtoa_lut.transpose('aot_ref', 'wl').values,
+            self.rot.values, self.sunglint_eps.values, sunglint_idx, self.air_mass)
 
     def simulate(self, aot_ref, BRDFg):
         r'''
-        :py:meth:`toa_simu` on the numpy LUTs, at all the wavelengths ``wl``
+        :py:meth:`toa_simu` on the numpy LUTs (:py:class:`AerosolModel`), at all the wavelengths ``wl``
 
         :param aot_ref: :math:`\tau_{ref}`
         :param BRDFg: sunglint amplitude :math:`B`
         '''
-        aot = self.interp_linear(self.aot_grid, self.aot_table, aot_ref)
-        Rdiff = self.interp_linear(self.Rdiff_grid, self.Rdiff_table, aot_ref)
-        sunglint_corr = self.transmittance_dir(aot, self.air_mass, rot=self.rot_values) * self.sunglint_eps_values
-        return Rdiff + sunglint_corr * BRDFg / sunglint_corr[self.sunglint_idx].mean()
-
-    def residuals(self, x, idx, y):
-        r'''Residuals :math:`R(\lambda) - R_{sim}(\lambda; \tau_{ref}, B)` at the wavelengths ``wl[idx]``'''
-        return y - self.simulate(*x)[idx]
-
-    def cost_residuals(self, x, idx, y):
-        r''':py:meth:`cost_func` with :py:meth:`residuals`'''
-        return np.sum(self.residuals(x, idx, y) ** 2)
-
-    def constraint_residuals(self, x, idx, y):
-        r''':py:meth:`constraint` with :py:meth:`residuals`'''
-        return np.min(self.residuals(x, idx, y))
+        return self.model.simulate(aot_ref, BRDFg)
 
     def transmittance_dir(self, aot, M, rot=0):
         r'''Direct transmittance :math:`T_{dir} = \exp\left[-(\tau_R + \tau_a) M\right]`'''
@@ -1477,7 +1582,7 @@ class Aerosol(Solver):
         r'''Non-negativity constraint :math:`\min_\lambda \left[R(\lambda) - R_{sim}(\lambda)\right] \geq 0`'''
         return np.min((self.func(x, aot, rot, Rtoa_lut, sunglint_eps, y)))
 
-    def solve(self, x0=[0.005, 0.]):
+    def solve(self, x0=[0.005, 0.], pool=None):
         r'''
         Retrieve :math:`(\tau_{ref}, B)` on every mega-pixel with enough water pixels
 
@@ -1497,91 +1602,26 @@ class Aerosol(Solver):
         (``aot_ref_std``) and the squared norm of its gradient (``brdfg_std``).
 
         :param x0: not used, the first guess is ``first_guess``
+        :param pool: :py:class:`multiprocessing.pool.Pool` to run the fits; default: a new pool
         '''
 
-        result = np.ctypeslib.as_ctypes(np.full((self.width, self.height, 4), np.nan))
-        shared_array = sharedctypes.RawArray(result._type_, result)
         # TODO clean up method to assign first guess
         self.x0 = x0
         self.x0 = self.first_guess
-
-        data = self.data
-        height = self.height
-        width = self.width
 
         if list(self.raster.keys()).__contains__('water_pixel_number'):
             water_pixel_number = self.raster.water_pixel_number
         else:
             water_pixel_number = None
         # numpy arrays: xarray indexing of each mega-pixel costs more than its fit
-        if water_pixel_number is not None:
-            n_water_pixels = water_pixel_number.transpose('y', 'x').values
-        spectra = np.asarray(data.transpose('wl', 'y', 'x').values)
-        wl = data.wl.values
-
-        def nearest_bands(valid, wl_target):
-            # positions in wl of the valid bands nearest to wl_target (as sel(method='nearest') after dropna)
-            valid_idx = np.flatnonzero(valid)
-            return valid_idx[pd.Index(wl[valid_idx]).get_indexer(wl_target, method='nearest')]
-
-        all_valid = np.ones(len(wl), dtype=bool)
-        idx_atmo_all = nearest_bands(all_valid, self.wl_atmo)
-        idx_non_neg_all = nearest_bands(all_valid, self.wl_non_neg)
-
-        global chunk_process
-
-        def chunk_process(args):
-            window_x, window_y = args
-            tmp = np.ctypeslib.as_array(shared_array)
-            x0 = self.x0
-            for ix in range(window_x, min(width, window_x + self.block_size)):
-                for iy in range(window_y, min(height, window_y + self.block_size)):
-                    if water_pixel_number is not None:
-                        if n_water_pixels[iy, ix] < self.pixel_threshold:
-                            continue
-                    # x0 = self.x0
-                    yfull = spectra[:, iy, ix]
-                    valid = ~np.isnan(yfull)
-                    # Pixels can pass the coarse water-count threshold while
-                    # still having no valid spectrum after masking: leave this
-                    # pixel's preinitialized retrieval values NaN.
-                    if not valid.any():
-                        continue
-                    if valid.all():
-                        idx_atmo, idx_non_neg = idx_atmo_all, idx_non_neg_all
-                    else:
-                        idx_atmo = nearest_bands(valid, self.wl_atmo)
-                        idx_non_neg = nearest_bands(valid, self.wl_non_neg)
-                    # sigma = Rtoa_std.isel(x=ix,y=iy).dropna(dim='wl')
-
-                    cons = ({'type': 'ineq',
-                             'fun': self.constraint_residuals,
-                             'args': (idx_non_neg, yfull[idx_non_neg])
-                             })
-
-                    min_res = minimize(self.cost_residuals, x0,
-                                       args=(idx_atmo, yfull[idx_atmo]),
-                                       method='SLSQP',
-                                       bounds=((self.aod550_min, self.aod550_max), (0, 1.3)),
-                                       constraints=cons, options=self._optimizer_options()
-                                       )
-                    xres = min_res.x
-                    if min_res.success and self.aerosol_state.solver_warm_start:
-                        x0 = xres
-                    # except:
-                    # print(wl_,aot_,rot_,Rtoa_lut_,sunglint_eps_, y)
-                    #    break
-
-                    std = [min_res.fun, np.sum(min_res.jac ** 2)]
-                    tmp[ix, iy, :] = [*xres, *std]
-
-        window_idxs = [(i, j) for i, j in
-                       itertools.product(range(0, self.width, self.block_size),
-                                         range(0, self.height, self.block_size))]
-
-        p = Pool()
-        res = p.map(chunk_process, window_idxs)
-        result = np.ctypeslib.as_array(shared_array)
+        n_water_pixels = None if water_pixel_number is None else water_pixel_number.transpose('y', 'x').values
+        spectra = np.asarray(self.data.transpose('wl', 'y', 'x').values)
+        fit = dict(x0=self.x0, model=self.model, wl=self.data.wl.values,
+                   wl_atmo=self.wl_atmo, wl_non_neg=self.wl_non_neg,
+                   bounds=((self.aod550_min, self.aod550_max), (0, 1.3)),
+                   options=self._optimizer_options(), warm_start=self.aerosol_state.solver_warm_start,
+                   pixel_threshold=self.pixel_threshold)
+        result = self.fit_blocks(_fit_aerosol_block, spectra, n_water_pixels, fit, 4, self.block_size, pool)
 
         self.aero_img = xr.Dataset(
             dict(
@@ -1627,7 +1667,7 @@ class Aerosol(Solver):
                 )
 
             self.aero_img['aerosol_validity_mask'] = (
-                data.notnull().any(dim='wl').astype(np.uint8)
+                self.data.notnull().any(dim='wl').astype(np.uint8)
             )
             self.aero_img['aerosol_validity_mask'].attrs.update(
                 long_name='aerosol retrieval input validity mask',
