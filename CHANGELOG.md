@@ -13,6 +13,9 @@ All notable changes to hGRS are listed here, most recent first. The format follo
 - `hgrs_config` command to print the configuration in use.
 - Read the Docs documentation: physical model and equations in the docstrings, Methods,
   Installation and History pages, API reference, runnable examples (doctests) and references.
+- Processing Chain Description page of the documentation (granule, scheduling, dataflow diagram,
+  inputs, outputs, return codes, log format, resources, data types), following the processing chain
+  documentation template.
 - Tutorial notebooks on an EnMAP image of Lake Trasimeno: image processing, batch processing and
   visualization.
 - Tutorial notebook on the visualization of a time series of hGRS L2A products with grstbx

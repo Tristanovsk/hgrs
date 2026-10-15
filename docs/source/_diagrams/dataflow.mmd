@@ -1,0 +1,38 @@
+flowchart LR
+    subgraph main["Input Main data"]
+        IN1["Level-1 image<br/>EnMAP L1C: GeoTIFF/BIL + XML<br/>PRISMA L1: HDF5<br/>EMIT L1B: NetCDF<br/>Hyperion L1R: HDF (.L1R)<br/>Tanager: HDF5<br/>Disk/POSIX"]
+    end
+
+    subgraph aux["Input auxiliary data"]
+        IN2["CAMS file<br/>NetCDF<br/>Disk/POSIX"]
+        IN3["Look-up tables<br/>NetCDF<br/>Disk/POSIX (data_root)"]
+        IN4["PRISMA L2C (PRISMA only)<br/>HDF5<br/>Disk/POSIX"]
+        IN5["User configuration (optional)<br/>YAML<br/>Disk/POSIX"]
+    end
+
+    PROC["hGRS Processing Chain<br/>hgrs_* CLI / hgrs.hgrs_process.Process"]
+
+    subgraph out["Output Data"]
+        OUT1["Level-2A hGRS product<br/>NetCDF<br/>Disk/POSIX"]
+        OUT2["Log messages<br/>Text (stderr)"]
+    end
+
+    IN1 --> PROC
+    IN2 --> PROC
+    IN3 --> PROC
+    IN4 --> PROC
+    IN5 --> PROC
+    PROC --> OUT1
+    PROC --> OUT2
+
+    classDef mainStyle fill:#3d85c6,stroke:#1c4587,stroke-width:2px,color:#ffffff
+    classDef auxStyle fill:#8e7cc3,stroke:#4a2d84,stroke-width:2px,color:#ffffff
+    classDef procStyle fill:#e69138,stroke:#a35a00,stroke-width:3px,color:#ffffff,font-weight:bold
+    classDef outStyle fill:#6aa84f,stroke:#274e13,stroke-width:2px,color:#ffffff
+    classDef groupStyle fill:#f3f3f3,stroke:#999999,stroke-dasharray: 4 3,color:#333333
+
+    class IN1 mainStyle
+    class IN2,IN3,IN4,IN5 auxStyle
+    class PROC procStyle
+    class OUT1,OUT2 outStyle
+    class main,aux,out groupStyle

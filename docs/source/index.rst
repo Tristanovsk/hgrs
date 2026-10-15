@@ -32,6 +32,7 @@ on the CAMS atmospheric composition.
    installation
    usage
    methods
+   processing_chain
 
 .. toctree::
    :maxdepth: 2
