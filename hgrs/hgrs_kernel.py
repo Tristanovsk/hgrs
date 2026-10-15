@@ -899,6 +899,23 @@ class Solver():
     def __init__(self):
         pass
 
+    @staticmethod
+    def interp_linear(grid, table, value):
+        r'''
+        Row of ``table`` at ``value`` by linear interpolation in ``grid`` (same result as
+        ``xarray.DataArray.interp``, NaN outside the grid); numpy version of the LUT interpolation for the
+        cost functions, called many times per mega-pixel.
+
+        :param grid: increasing values of the LUT coordinate
+        :param table: 2D array (grid, wl)
+        :param value: scalar coordinate value
+        '''
+        if not grid[0] <= value <= grid[-1]:
+            return np.full(table.shape[1], np.nan)
+        i = min(max(np.searchsorted(grid, value) - 1, 0), len(grid) - 2)
+        w = (value - grid[i]) / (grid[i + 1] - grid[i])
+        return (1 - w) * table[i] + w * table[i + 1]
+
     def errFit(self, hess_inv, resVariance):
         r'''
         Error/uncertainty of the estimated parameters
@@ -1109,12 +1126,7 @@ class WaterVapor(Solver):
         :param Twv_table: transmittance (tcwv, wl) on ``tcwv_grid``
         :param tcwv: total column water vapor (kg m-2)
         '''
-        grid = self.tcwv_grid
-        if not grid[0] <= tcwv <= grid[-1]:
-            return np.full(Twv_table.shape[1], np.nan)
-        i = min(max(np.searchsorted(grid, tcwv) - 1, 0), len(grid) - 2)
-        w = (tcwv - grid[i]) / (grid[i + 1] - grid[i])
-        return (1 - w) * Twv_table[i] + w * Twv_table[i + 1]
+        return self.interp_linear(self.tcwv_grid, Twv_table, tcwv)
 
     def toa_simu(self, wl, Twv, tcwv, a, b):
         r'''Simulated reflectance :math:`T_{wv}(\lambda; W)\,(a\lambda + b)`, ``wl`` in micron
@@ -1387,6 +1399,42 @@ class Aerosol(Solver):
             .dropna('aot_ref') / np.cos(np.radians(sza))
         )
 
+        # numpy copies of the LUTs for the fit (simulate): with xarray at each evaluation of the cost
+        # function and of the constraint, the fit is much slower
+        self.aot_grid = self.aot_lut.aot_ref.values
+        self.aot_table = self.aot_lut.transpose('aot_ref', 'wl').values
+        self.Rdiff_grid = self.Rtoa_lut.aot_ref.values
+        self.Rdiff_table = self.Rtoa_lut.transpose('aot_ref', 'wl').values
+        self.rot_values = self.rot.values
+        self.sunglint_eps_values = self.sunglint_eps.values
+        # positions of the wavelengths selected by wl_sunglint (slice or list), as in toa_simu
+        self.sunglint_idx = xr.DataArray(np.arange(len(wl)), coords={'wl': self.sunglint_eps.wl}).sel(
+            wl=self.wl_sunglint).values
+
+    def simulate(self, aot_ref, BRDFg):
+        r'''
+        :py:meth:`toa_simu` on the numpy LUTs, at all the wavelengths ``wl``
+
+        :param aot_ref: :math:`\tau_{ref}`
+        :param BRDFg: sunglint amplitude :math:`B`
+        '''
+        aot = self.interp_linear(self.aot_grid, self.aot_table, aot_ref)
+        Rdiff = self.interp_linear(self.Rdiff_grid, self.Rdiff_table, aot_ref)
+        sunglint_corr = self.transmittance_dir(aot, self.air_mass, rot=self.rot_values) * self.sunglint_eps_values
+        return Rdiff + sunglint_corr * BRDFg / sunglint_corr[self.sunglint_idx].mean()
+
+    def residuals(self, x, idx, y):
+        r'''Residuals :math:`R(\lambda) - R_{sim}(\lambda; \tau_{ref}, B)` at the wavelengths ``wl[idx]``'''
+        return y - self.simulate(*x)[idx]
+
+    def cost_residuals(self, x, idx, y):
+        r''':py:meth:`cost_func` with :py:meth:`residuals`'''
+        return np.sum(self.residuals(x, idx, y) ** 2)
+
+    def constraint_residuals(self, x, idx, y):
+        r''':py:meth:`constraint` with :py:meth:`residuals`'''
+        return np.min(self.residuals(x, idx, y))
+
     def transmittance_dir(self, aot, M, rot=0):
         r'''Direct transmittance :math:`T_{dir} = \exp\left[-(\tau_R + \tau_a) M\right]`'''
         return np.exp(-(rot + aot) * M)
@@ -1465,6 +1513,20 @@ class Aerosol(Solver):
             water_pixel_number = self.raster.water_pixel_number
         else:
             water_pixel_number = None
+        # numpy arrays: xarray indexing of each mega-pixel costs more than its fit
+        if water_pixel_number is not None:
+            n_water_pixels = water_pixel_number.transpose('y', 'x').values
+        spectra = np.asarray(data.transpose('wl', 'y', 'x').values)
+        wl = data.wl.values
+
+        def nearest_bands(valid, wl_target):
+            # positions in wl of the valid bands nearest to wl_target (as sel(method='nearest') after dropna)
+            valid_idx = np.flatnonzero(valid)
+            return valid_idx[pd.Index(wl[valid_idx]).get_indexer(wl_target, method='nearest')]
+
+        all_valid = np.ones(len(wl), dtype=bool)
+        idx_atmo_all = nearest_bands(all_valid, self.wl_atmo)
+        idx_non_neg_all = nearest_bands(all_valid, self.wl_non_neg)
 
         global chunk_process
 
@@ -1475,27 +1537,30 @@ class Aerosol(Solver):
             for ix in range(window_x, min(width, window_x + self.block_size)):
                 for iy in range(window_y, min(height, window_y + self.block_size)):
                     if water_pixel_number is not None:
-                        if water_pixel_number.isel(x=ix, y=iy).values < self.pixel_threshold:
+                        if n_water_pixels[iy, ix] < self.pixel_threshold:
                             continue
                     # x0 = self.x0
-                    yfull = data.isel(x=ix, y=iy).dropna(dim='wl')
+                    yfull = spectra[:, iy, ix]
+                    valid = ~np.isnan(yfull)
                     # Pixels can pass the coarse water-count threshold while
-                    # still having no valid spectrum after masking. xarray's
-                    # nearest selection raises on an empty wavelength index;
-                    # leave this pixel's preinitialized retrieval values NaN.
-                    if yfull.sizes['wl'] == 0:
+                    # still having no valid spectrum after masking: leave this
+                    # pixel's preinitialized retrieval values NaN.
+                    if not valid.any():
                         continue
+                    if valid.all():
+                        idx_atmo, idx_non_neg = idx_atmo_all, idx_non_neg_all
+                    else:
+                        idx_atmo = nearest_bands(valid, self.wl_atmo)
+                        idx_non_neg = nearest_bands(valid, self.wl_non_neg)
                     # sigma = Rtoa_std.isel(x=ix,y=iy).dropna(dim='wl')
 
                     cons = ({'type': 'ineq',
-                             'fun': self.constraint,
-                             'args': (self.aot_lut, self.rot, self.Rtoa_lut, self.sunglint_eps,
-                                      yfull.sel(wl=self.wl_non_neg, method='nearest'))
+                             'fun': self.constraint_residuals,
+                             'args': (idx_non_neg, yfull[idx_non_neg])
                              })
 
-                    min_res = minimize(self.cost_func, x0,
-                                       args=(self.aot_lut, self.rot, self.Rtoa_lut, self.sunglint_eps,
-                                             yfull.sel(wl=self.wl_atmo, method='nearest')),
+                    min_res = minimize(self.cost_residuals, x0,
+                                       args=(idx_atmo, yfull[idx_atmo]),
                                        method='SLSQP',
                                        bounds=((self.aod550_min, self.aod550_max), (0, 1.3)),
                                        constraints=cons, options=self._optimizer_options()
