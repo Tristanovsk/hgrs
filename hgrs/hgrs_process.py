@@ -21,6 +21,62 @@ from hgrs.config import behavior, get_app_config
 opj = os.path.join
 logger = logging.getLogger(__name__)
 
+
+def linear_interp_indices(coarse, fine):
+    '''
+    Linear interpolation from the ``coarse`` to the ``fine`` coordinates, as the linear ``interp`` of
+    xarray (scipy ``interp1d``): indices of the coarse nodes below and above each fine coordinate (in
+    the coarse order, ascending or not), distance between these nodes, and distance from the node
+    below (NaN outside the coarse coordinates).
+    '''
+    coarse, fine = np.asarray(coarse, dtype=float), np.asarray(fine, dtype=float)
+    order = np.argsort(coarse)
+    sorted_coarse = coarse[order]
+    hi = np.clip(np.searchsorted(sorted_coarse, fine), 1, len(coarse) - 1)
+    lo = hi - 1
+    outside = (fine < sorted_coarse[0]) | (fine > sorted_coarse[-1])
+    distance = np.where(outside, np.nan, fine - sorted_coarse[lo])
+    return order[lo], order[hi], sorted_coarse[hi] - sorted_coarse[lo], distance
+
+
+def interp_axis(values, axis, lo, hi, step, distance):
+    '''Linear interpolation of ``values`` along ``axis`` (see ``linear_interp_indices``), with the
+    operations of scipy ``interp1d``: a NaN node gives NaN to its neighbouring intervals.'''
+    shape = [1] * values.ndim
+    shape[axis] = -1
+    below = np.take(values, lo, axis)
+    result = np.take(values, hi, axis)
+    result -= below
+    result /= step.reshape(shape)
+    result *= distance.reshape(shape)
+    result += below
+    return result
+
+
+class BlockInterpolator():
+    '''
+    Bilinear interpolation of a coarse field (..., y, x) onto blocks of the full resolution grid: same
+    values as ``coarse.interp(x=x_block, y=y_block)``, without its overhead.
+
+    :param coarse: xarray.DataArray with ``x`` and ``y`` dimensions
+    :param y: full resolution ``y`` coordinates
+    :param x: full resolution ``x`` coordinates
+    '''
+
+    def __init__(self, coarse, y, x):
+        self.values = coarse.transpose(..., 'y', 'x').values
+        self.y = linear_interp_indices(coarse.y, y)
+        self.x = linear_interp_indices(coarse.x, x)
+
+    def __call__(self, y_slice, x_slice):
+        '''Interpolated values on the block ``[y_slice, x_slice]`` of the full resolution grid.'''
+        lo, hi, step, distance = (item[y_slice] for item in self.y)
+        # only the coarse rows around the block
+        first, last = min(lo.min(), hi.min()), max(lo.max(), hi.max())
+        along_x = interp_axis(self.values[..., first:last + 1, :], -1, *(item[x_slice] for item in self.x))
+        return interp_axis(along_x, -2, lo - first, hi - first, step, distance)
+
+
 class Process():
     '''
     hGRS processing chain: from a PRISMA or EnMAP L1 image and a CAMS file to the L2A product
@@ -110,7 +166,7 @@ class Process():
            where :math:`s_{CAMS}` is the standard deviation of the CAMS AOD. The AOT is then smoothed and
            gap-filled according to the ``aerosol: smoothing_method`` of the configuration
            (:py:meth:`~hgrs.hgrs_kernel.Aerosol.smoothing`).
-        7. **Full resolution** correction, by blocks of 256 x 256 pixels: gaseous and water vapor
+        7. **Full resolution** correction, by blocks of 64 x 64 pixels: gaseous and water vapor
            transmittances, diffuse atmospheric reflectance, sunglint and transmittances, giving
            :math:`R_{rs}(\lambda)`.
 
@@ -335,7 +391,8 @@ class Process():
         # water vapor
         # ------------------------------------------
         logger.info('Begin water vapor correction')
-        chunk = 256
+        # blocks of 64 x 64 pixels: the arrays of a block (all bands) fit in the CPU cache
+        chunk = 64
         height, width, Nwl = len(prod.raster.y), len(prod.raster.x), len(prod.raster.wl)
         variable = 'Rtoa'
         logger.info(
@@ -345,54 +402,40 @@ class Process():
             prod.Twv_raster.shape,
             chunk,
         )
-        for iy in range(0, height, chunk):
-            yc = min(height, iy + chunk)
-            if yc > height:
-                continue
-            for ix in range(0, width, chunk):
-                xc = min(width, ix + chunk)
-                if xc > width:
-                    continue
-                raster = prod.raster[variable][:, iy:yc, ix:xc]
+        # the coarse fields are interpolated block by block: full resolution cubes would multiply the memory
+        wl = prod.raster.wl
+        blocks = [(slice(iy, iy + chunk), slice(ix, ix + chunk))
+                  for iy in range(0, height, chunk) for ix in range(0, width, chunk)]
 
-                Twv_raster = prod.Twv_raster.interp(x=raster.x, y=raster.y)
+        def full_resolution_blocks(coarse):
+            return BlockInterpolator(coarse.sel(wl=prod.raster.wl), prod.raster.y, prod.raster.x)
 
-                prod.raster[variable].data[:, iy:yc, ix:xc] = raster / Twv_raster
+        Rtoa = prod.raster[variable].data
+        Twv = full_resolution_blocks(prod.Twv_raster)
+        for block in blocks:
+            Rtoa[(slice(None), *block)] = Rtoa[(slice(None), *block)] / Twv(*block)
 
-        Rdiff_full = aero_retrieval.atmo_img.Rtoa_diff  # .interp(x=prod.raster.x, y=prod.raster.y)
-        Tdir_full = aero_retrieval.atmo_img.Tdir  # .interp(x=prod.raster.x, y=prod.raster.y)
-        wl_sunglint = prod.water_parameters.wl_sunglint
+        Rdiff = full_resolution_blocks(aero_retrieval.atmo_img.Rtoa_diff)
+        Tdir = full_resolution_blocks(aero_retrieval.atmo_img.Tdir)
+        sunglint_eps = aero_retrieval.sunglint_eps.sel(wl=wl).values[:, None, None]
+        sunglint = np.isin(wl, wl.sel(wl=prod.water_parameters.wl_sunglint))
         logger.info('Begin aerosol correction and sunglint removal')
 
         Rrs = np.full((Nwl, height, width), np.nan, dtype=np.float32)
         BRDF_sunglint = np.full((height, width), np.nan, dtype=np.float32)
 
-        for iy in range(0, height, chunk):
-            yc = min(height, iy + chunk)
-            if yc > height:
-                continue
-            for ix in range(0, width, chunk):
-                xc = min(width, ix + chunk)
-                if xc > width:
-                    continue
+        for block in blocks:
+            Rcorr = Rtoa[(slice(None), *block)] - Rdiff(*block)
+            Tdir_ = Tdir(*block)
 
-                Rcorr = prod.raster.Rtoa[:, iy:yc, ix:xc]
-                Rdiff_full_ = Rdiff_full.interp(x=Rcorr.x, y=Rcorr.y)
+            # BRDF: mean of the sunglint bands, skipping NaN
+            brdf = Rcorr[sunglint] / (Tdir_[sunglint] * sunglint_eps[sunglint])
+            valid = ~np.isnan(brdf)
+            with np.errstate(invalid='ignore'):
+                BRDF_sunglint[block] = np.where(valid, brdf, 0).sum(axis=0) / valid.sum(axis=0)
 
-                Rcorr = Rcorr - Rdiff_full_
-
-                Tdir_full_ = Tdir_full.interp(x=Rcorr.x, y=Rcorr.y)
-
-                sunglint_eps = aero_retrieval.sunglint_eps
-                BRDF_sunglint[iy:yc, ix:xc] = (Rcorr.sel(wl=wl_sunglint) / (Tdir_full_.sel(wl=wl_sunglint)
-                                                                            * sunglint_eps.sel(wl=wl_sunglint))).mean(
-                    dim='wl')
-
-                # TODO clean up xarray inheritance of some extra coordinates...
-                # BRDF_sunglint = BRDF_sunglint.drop_vars('aot_ref', errors=False).squeeze()
-                Rdir = Tdir_full_ * sunglint_eps * BRDF_sunglint[iy:yc, ix:xc]
-
-                Rrs[:, iy:yc, ix:xc] = (Rcorr - Rdir) / np.pi
+            Rdir = Tdir_ * sunglint_eps * BRDF_sunglint[block]
+            Rrs[(slice(None), *block)] = (Rcorr - Rdir) / np.pi
 
         l2_prod = xr.Dataset(dict(Rrs=(["wl", "y", "x"], Rrs),
                                   brdfg_full=(["y", "x"], BRDF_sunglint), ),
@@ -459,12 +502,9 @@ class Process():
             # transmittance on the coarse grid, interpolated and applied by blocks (in place, float32):
             # a full-resolution transmittance cube would double the memory of Rrs
             Rrs = l2_prod.Rrs.data
-            for iy in range(0, height, chunk):
-                yc = min(height, iy + chunk)
-                for ix in range(0, width, chunk):
-                    xc = min(width, ix + chunk)
-                    Ttot_ = Ttot.interp(x=prod.raster.x[ix:xc], y=prod.raster.y[iy:yc])
-                    Rrs[:, iy:yc, ix:xc] /= Ttot_.transpose('wl', 'y', 'x').values
+            Ttot = full_resolution_blocks(Ttot)
+            for block in blocks:
+                Rrs[(slice(None), *block)] /= Ttot(*block)
         else:
             l2_prod['Rrs'] = l2_prod.Rrs / Ttot
 
