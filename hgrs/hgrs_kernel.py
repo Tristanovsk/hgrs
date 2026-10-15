@@ -1096,12 +1096,34 @@ class WaterVapor(Solver):
         ).Twv.interp(air_mass=self.air_mass)
         self.Twv_['wl'] = self.Twv_['wl'] / 1000
         self.wl_mic = self.Twv_.wl.values
+        # numpy copy of the LUT for the fit: with xarray.interp at each evaluation of the residuals,
+        # a fit is ~20x slower
+        self.tcwv_grid = self.Twv_.tcwv.values
+        self.Twv_table = self.Twv_.transpose('tcwv', 'wl').values
+
+    def interp_tcwv(self, Twv_table, tcwv):
+        r'''
+        :math:`T_{wv}(\lambda; W)` by linear interpolation in ``tcwv_grid`` (same result as
+        ``Twv_.interp(tcwv=tcwv)``, NaN outside the grid).
+
+        :param Twv_table: transmittance (tcwv, wl) on ``tcwv_grid``
+        :param tcwv: total column water vapor (kg m-2)
+        '''
+        grid = self.tcwv_grid
+        if not grid[0] <= tcwv <= grid[-1]:
+            return np.full(Twv_table.shape[1], np.nan)
+        i = min(max(np.searchsorted(grid, tcwv) - 1, 0), len(grid) - 2)
+        w = (tcwv - grid[i]) / (grid[i + 1] - grid[i])
+        return (1 - w) * Twv_table[i] + w * Twv_table[i + 1]
 
     def toa_simu(self, wl, Twv, tcwv, a, b):
         r'''Simulated reflectance :math:`T_{wv}(\lambda; W)\,(a\lambda + b)`, ``wl`` in micron
+
+        ``Twv`` is the LUT as a DataArray (``Twv_``) or as an array (tcwv, wl) on ``tcwv_grid``.
         '''
-        # print(Twv.tcwv)
-        return Twv.interp(tcwv=tcwv, method='linear').values * (a * wl + b)
+        if isinstance(Twv, xr.DataArray):
+            return Twv.interp(tcwv=tcwv, method='linear').values * (a * wl + b)
+        return self.interp_tcwv(Twv, tcwv) * (a * wl + b)
 
     def toa_simu2(self, wl, Twv, tcwv, c0, c1, c2, c3):
 
@@ -1133,9 +1155,14 @@ class WaterVapor(Solver):
         block_size = self.prod.block_size
         pixel_threshold = self.prod.pixel_threshold
         if list(self.raster.keys()).__contains__('water_pixel_number'):
-            water_pixel_number = self.raster.water_pixel_number
+            water_pixel_number = self.raster.water_pixel_number.transpose('y', 'x').values
         else:
             water_pixel_number = None
+        # numpy arrays: xarray indexing of each mega-pixel costs more than its fit
+        spectra = np.asarray(data.transpose('wl', 'y', 'x').values)
+        Twv_table = self.Twv_table
+        wl_mic = self.wl_mic
+        n_param = len(x0)
 
         global chunk_process
 
@@ -1148,13 +1175,18 @@ class WaterVapor(Solver):
             for ix in range(window_x, min(width, window_x + block_size)):
                 for iy in range(window_y, min(height, window_y + block_size)):
                     if water_pixel_number is not None:
-                        if water_pixel_number.isel(x=ix, y=iy).values < pixel_threshold:
+                        if water_pixel_number[iy, ix] < pixel_threshold:
                             continue
 
-                    y = data.isel(x=ix, y=iy).dropna(dim='wl')
+                    y = spectra[:, iy, ix]
+                    valid = ~np.isnan(y)
+                    # the residual variance needs more bands than parameters
+                    if valid.sum() <= n_param:
+                        continue
+                    y = y[valid]
                     # sigma = Rtoa_std.isel(x=ix,y=iy).dropna(dim='wl')
                     # TODO put solver parameter in self instance
-                    res_lsq = least_squares(self.func, self.x0, args=(self.Twv_, self.wl_mic, y),
+                    res_lsq = least_squares(self.func, self.x0, args=(Twv_table[:, valid], wl_mic[valid], y),
                                             bounds=([0, -10, 0], [60, 1, 1]),
                                             diff_step=1e-2, xtol=1e-2, ftol=1e-2, max_nfev=20)
                     xres = res_lsq.x
