@@ -15,6 +15,10 @@ All notable changes to hGRS are listed here, most recent first. The format follo
   folder and, commented, the default settings.
 - The processing checks the LUT files before reading the image, with a message giving the missing
   files and how to set their folder.
+- Default folder of the LUTs, used when `data_root` is not set: `~/.local/share/hgrs/lut` on Linux
+  (user data folder given by `platformdirs`), so that copying the LUTs there needs no configuration;
+  `hgrs_config` prints the LUT folder in use and where it is set, and `hgrs_config --init` without a
+  folder creates the default one. `platformdirs` is a new dependency.
 - `previous_behavior` setting of the user configuration file and `HGRS_PREVIOUS_BEHAVIOR`
   environment variable, to select the former parameters and algorithms without editing the package.
 - Configuration page of the documentation: quick start, origin of the settings, annotated default
@@ -64,7 +68,8 @@ All notable changes to hGRS are listed here, most recent first. The format follo
   longer changes the level of the root logger. The `hgrs_prisma` and `hgrs_enmap` commands still
   print INFO messages; in scripts and notebooks, call `logging.basicConfig(level=logging.INFO)` to
   see them.
-- The LUT path of the packaged configuration files is a placeholder (`path/to/lut`).
+- The LUT path of the packaged configuration files is not set (`data_root: null`): the default folder
+  of the LUTs is used.
 - `pyyaml`, `matplotlib`, `cartopy`, `docopt` and `dask` are declared dependencies; `importlib_resources`
   is no longer needed.
 - The development notebooks are no longer tracked.

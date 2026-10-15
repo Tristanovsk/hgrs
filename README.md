@@ -24,10 +24,11 @@ Then, download the look-up table (LUT) files and copy them in a specific folder 
 
 [download lut](https://drive.google.com/drive/folders/1r3unjh8UYTvO87nbppqivVq_cwbVxhLk?usp=sharing)
 
-Write the path of the LUT folder in your user configuration file (`~/.config/hgrs/config.yml`) and
-check it (no reinstallation needed when it changes):
+Copy them into the default folder of hGRS, `~/.local/share/hgrs/lut` on Linux (no configuration
+needed), or keep them in another folder and write it in your user configuration file
+(`~/.config/hgrs/config.yml`, no reinstallation needed when it changes). Then check the LUTs:
 ```commandline
-hgrs_config --init path/to/lut
+hgrs_config --init path/to/lut   # only if the LUTs are not in the default folder
 hgrs_config
 ```
 All the settings are described in the [configuration page](https://hgrs.readthedocs.io/en/latest/configuration.html)

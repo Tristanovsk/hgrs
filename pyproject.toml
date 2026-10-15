@@ -43,6 +43,7 @@ dependencies = [
     "numba",
     "omnicloudmask",
     "pyyaml",
+    "platformdirs",
     "xesmf",
     "matplotlib",
     "cartopy",

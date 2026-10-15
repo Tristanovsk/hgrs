@@ -6,7 +6,8 @@ Look-up tables
 
 The radiative transfer look-up tables (LUT) are not part of the package. Download them from
 `this folder <https://drive.google.com/drive/folders/1r3unjh8UYTvO87nbppqivVq_cwbVxhLk?usp=sharing>`__
-and save them in a directory of your choice (``your_LUT_PATH`` below).
+and save them in the default folder of hGRS, ``~/.local/share/hgrs/lut`` on Linux (no configuration
+needed, see :doc:`configuration`), or in a directory of your choice (``your_LUT_PATH`` below).
 
 Python environment
 ------------------
@@ -44,11 +45,16 @@ Then check the command-line tools:
 Configuration
 -------------
 
-Write the folder of the LUTs in your user configuration file and check it:
+If the LUTs are not in the default folder, write their folder in your user configuration file:
 
 .. code-block:: bash
 
    hgrs_config --init your_LUT_PATH
+
+Then check the configuration and the LUTs:
+
+.. code-block:: bash
+
    hgrs_config
 
 See :doc:`configuration` for all the settings.

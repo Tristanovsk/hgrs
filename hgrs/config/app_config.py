@@ -36,7 +36,7 @@ class AppConfig:
             if value in paths
         }
         return cls(
-            data_root=Path(paths.get("data_root", "data")),
+            data_root=Path(paths["data_root"]),
             lut_dir=Path(paths.get("lut_dir", ".")),
             lut_files=lut_files,
             atmospheric_correction=AtmosphericCorrectionConfig.from_mapping(
@@ -68,9 +68,9 @@ class AppConfig:
         if missing:
             raise FileNotFoundError(
                 "LUT file(s) not found: " + ", ".join(missing)
-                + ". Set the folder of the LUTs with `hgrs_config --init /path/to/lut` "
-                "(or path: data_root in the user configuration file, or HGRS_DATA_ROOT); "
-                "check the configuration with `hgrs_config`."
+                + f". Copy the LUTs into {self.data_root}, or set their folder with "
+                "`hgrs_config --init /path/to/lut` (or path: data_root in the user configuration "
+                "file, or HGRS_DATA_ROOT); check the configuration with `hgrs_config`."
             )
 
 

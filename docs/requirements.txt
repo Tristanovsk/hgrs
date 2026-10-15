@@ -20,6 +20,7 @@ netCDF4
 h5netcdf
 rioxarray
 pyyaml
+platformdirs
 docopt
 tqdm
 importlib_resources

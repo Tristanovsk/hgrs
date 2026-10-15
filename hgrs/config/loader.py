@@ -9,6 +9,10 @@ The settings are read from, in increasing order of priority:
    not set, ``$XDG_CONFIG_HOME/hgrs/config.yml`` (``~/.config/hgrs/config.yml`` by default),
 3. the ``HGRS_DATA_ROOT`` environment variable, which overrides ``path: data_root``.
 
+If ``data_root`` is not set (``null``), the LUTs are read from the default folder of the user data,
+:py:func:`default_data_root` (``~/.local/share/hgrs/lut`` on Linux): copying the LUTs there needs no
+configuration.
+
 The user file only needs the keys that differ from the defaults, e.g.::
 
     path:
@@ -26,7 +30,17 @@ from functools import lru_cache
 from importlib.resources import files
 from pathlib import Path
 
+import platformdirs
 import yaml
+
+
+def default_data_root():
+    '''
+    Default folder of the LUTs, used when ``data_root`` is not set: ``lut`` in the user data folder of
+    hGRS (``~/.local/share/hgrs/lut`` on Linux, ``~/Library/Application Support/hgrs/lut`` on macOS,
+    ``%LOCALAPPDATA%\\hgrs\\lut`` on Windows).
+    '''
+    return platformdirs.user_data_path('hgrs') / 'lut'
 
 
 def default_config_file():
@@ -87,8 +101,18 @@ def _load_config(previous_behavior):
     if os.environ.get('HGRS_DATA_ROOT'):
         config = _merge(config, {'path': {'data_root': os.environ['HGRS_DATA_ROOT']}})
 
-    config['path']['data_root'] = os.path.expanduser(config['path']['data_root'])
+    data_root = config['path'].get('data_root')
+    config['path']['data_root'] = os.path.expanduser(data_root) if data_root else str(default_data_root())
     return config
+
+
+def data_root_source():
+    '''Return where the LUT folder in use is set: ``HGRS_DATA_ROOT``, user file or default folder.'''
+    if os.environ.get('HGRS_DATA_ROOT'):
+        return 'HGRS_DATA_ROOT'
+    if (read_user_config().get('path') or {}).get('data_root'):
+        return 'user configuration'
+    return 'default folder'
 
 
 def init_user_config(data_root=None, force=False):
@@ -96,7 +120,8 @@ def init_user_config(data_root=None, force=False):
     Write the user configuration file with the LUT folder `data_root` and, commented, the default
     settings (to uncomment and change if needed).
 
-    :param data_root: folder of the LUTs (``path/to/lut`` placeholder if None)
+    :param data_root: folder of the LUTs; if None, ``data_root`` is not set and the default folder
+        :py:func:`default_data_root` is used (and created)
     :param force: overwrite an existing user configuration file
     :return: path of the file written
     :raises FileExistsError: if the file exists and `force` is False
@@ -105,7 +130,6 @@ def init_user_config(data_root=None, force=False):
     if user_file.exists() and not force:
         raise FileExistsError(f'{user_file} already exists (use --force to overwrite it)')
 
-    data_root = str(Path(data_root).expanduser().absolute()) if data_root else 'path/to/lut'
     defaults = files(__package__).joinpath('default_config.yml').read_text(encoding='utf-8')
     defaults = defaults.split('\n\n', 1)[1]  # without the header of the packaged file
     commented = ''.join(('# ' + line if line.strip() else '#\n') if not line.startswith('#') else line
@@ -116,8 +140,7 @@ def init_user_config(data_root=None, force=False):
         "# it (with its parent keys) from the defaults below and uncomment it.\n"
         "# Print the configuration in use and check the LUTs with `hgrs_config`.\n"
         "\n"
-        "path:\n"
-        f"  data_root: '{data_root}'\n"
+        f"{_data_root_lines(data_root)}"
         "\n"
         "# ------------------------------------------------------------------------------------------\n"
         "# Packaged defaults (hgrs/config/default_config.yml)\n"
@@ -126,7 +149,17 @@ def init_user_config(data_root=None, force=False):
     )
     user_file.parent.mkdir(parents=True, exist_ok=True)
     user_file.write_text(content, encoding='utf-8')
+    if not data_root:
+        default_data_root().mkdir(parents=True, exist_ok=True)
     return user_file
+
+
+def _data_root_lines(data_root):
+    if data_root:
+        return f"path:\n  data_root: '{Path(data_root).expanduser().absolute()}'\n"
+    return (f"# LUT folder: the default one, {default_data_root()}; to use another folder:\n"
+            "# path:\n"
+            "#   data_root: '/path/to/lut'\n")
 
 
 def lut_status():
@@ -162,7 +195,7 @@ def main(argv=None):
             return 1
         print(f'user configuration written: {user_file}')
         if not args.init:
-            print('set the folder of the LUTs in it (path: data_root)')
+            print(f'copy the LUT files into the default folder: {default_data_root()}')
         _load_config.cache_clear()
         print('---')
 
@@ -171,6 +204,7 @@ def main(argv=None):
     print(f'default configuration: {default_config_file()}')
     print(f'user configuration:    {user_file} ({"found" if user_file.is_file() else "not found"})')
     print(f'previous behavior:     {behavior.PREVIOUS_BEHAVIOR}')
+    print(f'LUT folder:            {load_config()["path"]["data_root"]} ({data_root_source()})')
     print('---')
     print(yaml.safe_dump(load_config(), sort_keys=False), end='')
     print('---')
@@ -179,8 +213,8 @@ def main(argv=None):
         print(f'LUT {name:13s} {"ok     " if exists else "MISSING"} {path}')
         missing |= not exists
     if missing:
-        print('error: LUT file(s) missing; set the folder of the LUTs with '
-              '`hgrs_config --init /path/to/lut` (or path: data_root in the user configuration file, '
-              'or HGRS_DATA_ROOT)', file=sys.stderr)
+        print(f'error: LUT file(s) missing; copy them into {load_config()["path"]["data_root"]}, or set '
+              'their folder with `hgrs_config --init /path/to/lut` (or path: data_root in the user '
+              'configuration file, or HGRS_DATA_ROOT)', file=sys.stderr)
         return 1
     return 0

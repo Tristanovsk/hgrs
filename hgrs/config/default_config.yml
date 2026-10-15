@@ -9,8 +9,9 @@
 previous_behavior: false
 
 path:
-  # folder of the look-up tables (LUTs); also set by the environment variable HGRS_DATA_ROOT
-  data_root: 'path/to/lut'
+  # folder of the look-up tables (LUTs); also set by the environment variable HGRS_DATA_ROOT;
+  # null: default folder of the user data, ~/.local/share/hgrs/lut on Linux (see `hgrs_config`)
+  data_root: null
   # LUT file names, in data_root (the files shipped with the package, in hgrs/data/lut, are used
   # when they are not found in data_root)
   toa_lut: 'toa_lut_opac_wind_up_v3.nc'

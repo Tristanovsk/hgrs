@@ -4,19 +4,31 @@ Configuration
 Quick start
 -----------
 
-hGRS needs the folder of the look-up tables (LUTs, see :doc:`installation`). Write it in your user
-configuration file and check it with:
+hGRS needs the look-up tables (LUTs, see :doc:`installation`). Either:
+
+- **copy them into the default folder**, with no configuration: ``~/.local/share/hgrs/lut`` on Linux
+  (``~/Library/Application Support/hgrs/lut`` on macOS, ``%LOCALAPPDATA%\hgrs\lut`` on Windows;
+  ``hgrs_config`` prints it, and ``hgrs_config --init`` creates it),
+- **or keep them in another folder** and write it in your user configuration file:
+
+  .. code-block:: bash
+
+     hgrs_config --init /path/to/lut   # creates ~/.config/hgrs/config.yml
+
+Then check:
 
 .. code-block:: bash
 
-   hgrs_config --init /path/to/lut   # creates ~/.config/hgrs/config.yml
    hgrs_config                       # prints the configuration in use and checks the LUTs
 
 Nothing else is needed: all the other settings have default values. The configuration is read at run
 time, so it can be changed without reinstalling the package.
 
-``hgrs_config`` ends with the status of each LUT and returns the exit code 1 if one is missing::
+``hgrs_config`` gives the LUT folder in use and where it is set (``HGRS_DATA_ROOT``, user configuration
+or default folder), and ends with the status of each LUT; it returns the exit code 1 if one is missing::
 
+   LUT folder:            /path/to/lut (user configuration)
+   ...
    LUT toa           ok      /path/to/lut/toa_lut_opac_wind_up_v3.nc
    LUT transmittance ok      /path/to/lut/transmittance_lut_opac_wind_v3.nc
    LUT abs_gas       ok      .../hgrs/data/lut/lut_abs_opt_thickness_normalized.nc
@@ -45,9 +57,15 @@ The settings are merged from, in increasing order of priority:
    * - ``HGRS_DATA_ROOT`` environment variable
      - Folder of the LUTs (``path: data_root``).
 
-``hgrs_config --init`` writes the user file with the folder of the LUTs and, commented, a copy of all
-the default settings: to change one, uncomment it with its parent keys. It does not overwrite an
-existing file, unless ``--force`` is given.
+When ``data_root`` is set nowhere (``null`` in the defaults), the LUTs are read from the default folder
+(:py:func:`hgrs.config.loader.default_data_root`). This suits a personal installation; on a shared
+machine or a cluster, set ``HGRS_DATA_ROOT`` (e.g. in the module or job environment) to a shared copy
+of the LUTs.
+
+``hgrs_config --init /path/to/lut`` writes the user file with the folder of the LUTs and, commented, a
+copy of all the default settings: to change one, uncomment it with its parent keys. Without a folder,
+``hgrs_config --init`` leaves ``data_root`` unset and creates the default folder. It does not overwrite
+an existing file, unless ``--force`` is given.
 
 Environment variables
 ~~~~~~~~~~~~~~~~~~~~~
@@ -144,9 +162,10 @@ Troubleshooting
 ---------------
 
 ``LUT file(s) not found``
-   The folder of the LUTs is not set or is wrong: run ``hgrs_config`` to see the paths in use, then
-   ``hgrs_config --init /path/to/lut --force`` (or edit ``data_root`` in the user file). An
-   ``HGRS_DATA_ROOT`` variable set in your shell takes priority over the file.
+   The LUTs are not in the folder in use: run ``hgrs_config`` to see this folder and where it is set,
+   then copy the LUTs into it, or set the right folder with ``hgrs_config --init /path/to/lut --force``
+   (or edit ``data_root`` in the user file). An ``HGRS_DATA_ROOT`` variable set in your shell takes
+   priority over the file.
 
 ``Unknown ... setting(s)``
    A key of the ``atmospheric_correction`` section of the user file is misspelled or misplaced:

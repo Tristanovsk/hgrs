@@ -1,7 +1,7 @@
 # Previous parameter set used when PREVIOUS_BEHAVIOR is true.
 path:
   # set your own LUT folder in ~/.config/hgrs/config.yml (or with HGRS_DATA_ROOT)
-  data_root: 'path/to/lut'
+  data_root: null
   toa_lut: 'toa_lut_opac_wind_up_v3.nc'
   trans_lut: 'transmittance_lut_opac_wind_v3.nc'
   abs_gas_file: 'lut_abs_opt_thickness_normalized.nc'
