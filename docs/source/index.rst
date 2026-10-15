@@ -30,6 +30,7 @@ on the CAMS atmospheric composition.
    :caption: User guide
 
    installation
+   configuration
    usage
    methods
    processing_chain

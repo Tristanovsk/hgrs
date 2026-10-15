@@ -10,7 +10,15 @@ All notable changes to hGRS are listed here, most recent first. The format follo
 - User configuration file `~/.config/hgrs/config.yml` (or `$XDG_CONFIG_HOME/hgrs/config.yml`),
   read at run time on top of the packaged defaults of `hgrs/config/default_config.yml`; the `HGRS_CONFIG` and
   `HGRS_DATA_ROOT` environment variables select another file or the LUT folder.
-- `hgrs_config` command to print the configuration in use.
+- `hgrs_config` command to print the configuration in use and check the LUT files (exit code 1 if
+  one is missing); `hgrs_config --init /path/to/lut` creates the user configuration file with the LUT
+  folder and, commented, the default settings.
+- The processing checks the LUT files before reading the image, with a message giving the missing
+  files and how to set their folder.
+- `previous_behavior` setting of the user configuration file and `HGRS_PREVIOUS_BEHAVIOR`
+  environment variable, to select the former parameters and algorithms without editing the package.
+- Configuration page of the documentation: quick start, origin of the settings, annotated default
+  settings, examples, former behavior and troubleshooting.
 - Read the Docs documentation: physical model and equations in the docstrings, Methods,
   Installation and History pages, API reference, runnable examples (doctests) and references.
 - Processing Chain Description page of the documentation (granule, scheduling, dataflow diagram,

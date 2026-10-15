@@ -64,7 +64,7 @@ Atmospheric and sunglint correction
 Configuration
 -------------
 
-Settings read by :py:func:`hgrs.config.get_app_config` (see :doc:`installation`); the
+Settings read by :py:func:`hgrs.config.get_app_config` (see :doc:`configuration`); the
 switch :py:data:`hgrs.config.behavior.PREVIOUS_BEHAVIOR` selects the former parameters and algorithms.
 
 .. autosummary::
@@ -86,6 +86,8 @@ switch :py:data:`hgrs.config.behavior.PREVIOUS_BEHAVIOR` selects the former para
 
    hgrs.config.get_app_config
    hgrs.config.loader.load_config
+   hgrs.config.loader.init_user_config
+   hgrs.config.loader.main
 
 Spectral convolution
 --------------------

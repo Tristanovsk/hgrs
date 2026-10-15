@@ -58,6 +58,22 @@ class AppConfig:
                 return packaged
         return path
 
+    def check_luts(self):
+        """
+        Check that the LUT files exist.
+
+        :raises FileNotFoundError: listing the missing LUTs and how to set their folder
+        """
+        missing = [str(path) for path in map(self.resolve_lut, self.lut_files) if not path.is_file()]
+        if missing:
+            raise FileNotFoundError(
+                "LUT file(s) not found: " + ", ".join(missing)
+                + ". Set the folder of the LUTs with `hgrs_config --init /path/to/lut` "
+                "(or path: data_root in the user configuration file, or HGRS_DATA_ROOT); "
+                "check the configuration with `hgrs_config`."
+            )
+
+
 def get_app_config() -> AppConfig:
     """Load the configuration: packaged defaults (selected by behavior), user file, environment."""
     return AppConfig.from_mapping(load_config())

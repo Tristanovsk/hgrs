@@ -15,7 +15,7 @@ import logging
 
 import hgrs.driver as driver
 import hgrs
-from hgrs.config import behavior
+from hgrs.config import behavior, get_app_config
 
 opj = os.path.join
 logger = logging.getLogger(__name__)
@@ -127,7 +127,11 @@ class Process():
         :param view_azimuth: viewing azimuth angle (degrees), EMIT
         :param view_zenith: viewing zenith angle (degrees), EMIT
         :param ortho: map the EMIT image with the GLT grid of the product (exclusive with ``geoproject``)
+        :raises FileNotFoundError: if a LUT file is missing (checked before reading the image)
         '''
+
+        # check the LUTs before the (long) reading of the image
+        get_app_config().check_luts()
 
         # ---------------------------------------
         # construct L1C image plus angle rasters

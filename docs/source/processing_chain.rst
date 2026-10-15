@@ -43,7 +43,8 @@ The processor is invoked through one command-line executable per sensor, which w
      - :py:func:`hgrs.run_tanager.main`
      - Tanager basic radiance
 
-The ``hgrs_config`` command prints the configuration in use (see :doc:`installation`).
+The ``hgrs_config`` command prints the configuration in use and checks the LUTs;
+``hgrs_config --init`` creates the user configuration file (see :doc:`configuration`).
 
 Application Domain (Granule)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -112,7 +113,7 @@ Inputs
    * - Look-up tables
      - 1..1 (mandatory)
      - Radiative transfer LUTs (``toa_lut``, ``trans_lut``) in the ``data_root`` folder of the
-       configuration (see :doc:`installation`); the gaseous absorption LUT and the solar irradiance
+       configuration (see :doc:`configuration`); the gaseous absorption LUT and the solar irradiance
        spectra are shipped with the package.
    * - User configuration file
      - 0..1 (optional)
