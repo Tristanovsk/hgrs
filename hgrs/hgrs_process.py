@@ -211,6 +211,8 @@ class Process():
         # (or forecast_period/forecast_reference_time before normalization).
         # Do not request chunks for a dimension that may not exist.
         cams = xr.open_dataset(cams_path, decode_cf=True)
+        # select the scene location first: stacking and sorting the global fields reads the whole file
+        cams = cams.sel(latitude=clat, longitude=clon, method='nearest')
 
         # fix for new ADS format (sept 2024)
         if ('forecast_period' in cams.dims) & ('forecast_reference_time' in cams.dims):
@@ -226,7 +228,6 @@ class Process():
         if np.issubdtype(cams_time_dtype, np.datetime64):
             date = date.astype(cams_time_dtype)
         cams = cams.sel(time=date, method='nearest')
-        cams = cams.sel(latitude=clat, longitude=clon, method='nearest')
 
         # -----------------------------------------
         # Create hGRS object
