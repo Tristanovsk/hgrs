@@ -17,6 +17,9 @@ All notable changes to hGRS are listed here, most recent first. The format follo
   visualization.
 - Tutorial notebook on the visualization of a time series of hGRS L2A products with grstbx
   (true-colour composite, area of interest, multi-date spectra and time series, interactive viewers).
+- Tutorial notebook on a PRISMA image: the L1 TOA reflectance and the ASI L2C reflectance interpolated onto
+  the grid of the hGRS L2A product, true-colour composites before and after correction, retrieved parameters,
+  TOA and $R_{rs}$ spectra of points of interest, spectral transect, comparison with the L2C reflectance.
 - New hGRS logo for the light and dark modes of the documentation.
 - `docs/make.bat` to build the documentation on Windows, and `.gitattributes` to check out `.bat`
   files with CRLF line endings.
