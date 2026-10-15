@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -44,8 +45,18 @@ class AppConfig:
         )
 
     def resolve_lut(self, name: str) -> Path:
-        """Resolve a configured LUT key beneath the data root and LUT folder."""
-        return self.data_root / self.lut_dir / self.lut_files[name]
+        """
+        Resolve a configured LUT key beneath the data root and LUT folder.
+
+        The LUTs shipped with the package (``hgrs/data/lut``, e.g. the gaseous absorption LUT) are
+        used when the file is not found under the data root.
+        """
+        path = self.data_root / self.lut_dir / self.lut_files[name]
+        if not path.exists():
+            packaged = Path(str(files("hgrs").joinpath("data/lut", self.lut_files[name])))
+            if packaged.exists():
+                return packaged
+        return path
 
 def get_app_config() -> AppConfig:
     """Load the configuration: packaged defaults (selected by behavior), user file, environment."""
