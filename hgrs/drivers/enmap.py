@@ -110,8 +110,9 @@ class EnmapDriver(L1Driver):
 
         date_str = specific.findtext('datatakeStart').strip().replace("Z", "")
 
-        # open raster
-        data = rxr.open_rasterio(l1c_raster_path, chunks={'x': 512, 'y': 512, 'band': 20},
+        # open raster: the GeoTIFF is band interleaved, in strips of full rows, so one chunk per 8 bands
+        # on the whole image; lock=False decompresses the chunks in parallel (one file handle per thread)
+        data = rxr.open_rasterio(l1c_raster_path, chunks={'x': -1, 'y': -1, 'band': 8}, lock=False,
                                  mask_and_scale=True).to_dataset(name='Ltoa')
 
         if '.BIL' in l1c_raster_path:
