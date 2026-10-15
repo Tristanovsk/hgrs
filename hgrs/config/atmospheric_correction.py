@@ -184,9 +184,9 @@ class AerosolParameters:
         )
 
         lut_aod = aerosol_lut.aot.sel(aot_ref=1).interp(wl=cams_aod.wl)
-        model_index = np.abs(
+        model_index = int(np.argmin(np.abs(
             (cams_aod / cams_data.aod550) - lut_aod
-        ).sum("wl").argmin()
+        ).sum("wl").values))
         cams_model = str(aerosol_lut.model.values[model_index])
 
         prior_mean = float(cams_data.aod550.mean().values)

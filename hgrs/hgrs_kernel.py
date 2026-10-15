@@ -879,7 +879,7 @@ class Algo(Product):
         tcwvs = np.unique(tcwv_vals)
         tcwvs = tcwvs[~np.isnan(tcwvs)]
         # TODO improve for air_mass raster
-        Twvs = self.Twv_lut.Twv.interp(air_mass=self.air_mass_mean).interp(tcwv=tcwvs, method='linear').drop('air_mass')
+        Twvs = self.Twv_lut.Twv.interp(air_mass=self.air_mass_mean).interp(tcwv=tcwvs, method='linear').drop_vars('air_mass')
         self.Twv_raster = Twvs.interp(tcwv=tcwv_vals, method='nearest')
         if not behavior.PREVIOUS_BEHAVIOR:
             self.Twv_raster = self.Twv_raster.where(tcwv_vals.notnull())
@@ -1673,7 +1673,7 @@ class Aerosol(Solver):
         Tdirs.attrs['description'] = 'direct transmittance due to rayleigh and aerosol for total air mass'
 
         # merge into dataset
-        self.atmo_img = xr.merge([aots, Rdiffs, Tdirs])
+        self.atmo_img = xr.merge([aots, Rdiffs, Tdirs], compat='no_conflicts')
         self.atmo_img.attrs['description'] = "atmospheric parameters for rayleigh and aerosol components",
         self.atmo_img.attrs['aerosol_model'] = self.aerosol_model
 

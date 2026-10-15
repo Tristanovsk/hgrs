@@ -143,7 +143,7 @@ class SolarIrradiance():
 
         :return: spectral irradiance (DataArray, wl in nm)
         '''
-        solar_irr = xr.open_dataset(thuillier_file).squeeze().data.drop('time') * 1e3
+        solar_irr = xr.open_dataset(thuillier_file).squeeze().data.drop_vars('time') * 1e3
         solar_irr = solar_irr.rename({'wavelength': 'wl'})
         # keep spectral range of interest UV-SWIR
         solar_irr = solar_irr[(solar_irr.wl <= self.wl_max) & (solar_irr.wl >= self.wl_min)]
