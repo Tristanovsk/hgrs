@@ -264,7 +264,7 @@ class Product():
     ----------
     l1c_obj : xarray.Dataset
         L1C image with the TOA reflectance ``Rtoa`` (wl, y, x), the band widths ``fwhm`` and the angles
-        ``sza``, ``vza``, ``raa`` (see :py:class:`hgrs.driver.Driver`).
+        ``sza``, ``vza``, ``raa`` (see :py:mod:`hgrs.drivers`).
     xcoarsen, ycoarsen : int
         Number of pixels along x and y aggregated into one mega-pixel of the coarse raster.
     expon : float
@@ -290,8 +290,7 @@ class Product():
 
        import hgrs
 
-       driver = hgrs.Driver('enmap')
-       l1c = driver.read_l1c_enmap('ENMAP01-____L1C-DT0000088121_..._V010502_...', reflectance_unit=True)
+       l1c = hgrs.EnmapDriver().read('ENMAP01-____L1C-DT0000088121_..._V010502_...')
        prod = hgrs.Product(l1c, xcoarsen=20, ycoarsen=20)
        prod.apply_water_masks()          # Rtoa set to NaN outside water pixels
        prod.air_mass_mean, prod.wl_sunglint

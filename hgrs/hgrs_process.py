@@ -13,8 +13,8 @@ import xarray as xr
 import datetime as dt
 import logging
 
-import hgrs.driver as driver
 import hgrs
+from hgrs.drivers import get_driver, driver_for_platform
 from hgrs.config import behavior, get_app_config
 
 opj = os.path.join
@@ -77,7 +77,7 @@ class Process():
 
         Steps (see :py:mod:`hgrs.hgrs_kernel` for the equations):
 
-        1. **L1 image**, converted to TOA reflectance (:py:class:`~hgrs.driver.Driver`): EnMAP L1C
+        1. **L1 image**, converted to TOA reflectance (:py:mod:`hgrs.drivers`): EnMAP L1C
            (``img_path`` is a directory), PRISMA L1 + L2C for the angles (``img_path`` is a list
            ``[l1_path, l2c_path]``), or, with ``sensor``, EMIT L1B, Hyperion L1R or Tanager (scene
            geometry given as parameters for EMIT and Hyperion).
@@ -116,8 +116,9 @@ class Process():
         :param img_path: path of the EnMAP L1C directory, list ``[l1_path, l2c_path]`` of the PRISMA
             L1 and L2C files, or path of the EMIT, Hyperion or Tanager image
         :param cams_path: path of the CAMS NetCDF file covering the acquisition (forecast or reanalysis)
-        :param sensor: ``'enmap'`` (EnMAP or PRISMA, from ``img_path``), ``'emit'``, ``'hyperion'`` or
-            ``'tanager'``
+        :param sensor: name of the driver (:py:data:`hgrs.drivers.DRIVERS`): ``'enmap'``, ``'prisma'``,
+            ``'emit'``, ``'hyperion'`` or ``'tanager'``; with the default ``'enmap'``, a list ``img_path`` is
+            read as PRISMA
         :param geoproject: reproject the image on a map grid; if False, keep the native pixel grid with
             the 2D ``lon`` / ``lat`` arrays
         :param sun_azimuth: solar azimuth angle (degrees), EMIT and Hyperion
@@ -140,86 +141,28 @@ class Process():
         # action = 'load L1C image plus angle rasters'
         # pbar = tqdm(total=len(action),
         #             desc=action + f": {img_path} ")
-        if sensor == 'emit':
-            logger.info('Opening EMIT L1B radiance image')
-            geometry = {
-                'sun_azimuth': sun_azimuth,
-                'sun_elevation': sun_elevation,
-                'view_azimuth': view_azimuth,
-                'view_zenith': view_zenith,
-            }
-            missing = [key for key, value in geometry.items() if value is None]
-            if missing:
-                raise ValueError(
-                    'EMIT processing requires scene geometry parameters: '
-                    + ', '.join(missing)
-                )
-            try:
-                driver = hgrs.Driver('emit')
-                l1_prod = driver.read_emit(
-                    img_path, **geometry, geoproject=geoproject, ortho=ortho,
-                )
-            except Exception as e:
-                logger.exception('Could not read EMIT input %s', img_path)
-                raise RuntimeError('EMIT input could not be read') from e
-        elif sensor == 'hyperion':
-            logger.info('Opening Hyperion L1R image')
-            geometry = {
-                'sun_azimuth': sun_azimuth,
-                'sun_elevation': sun_elevation,
-                'satellite_inclination': satellite_inclination,
-                'look_angle': look_angle,
-            }
-            missing = [key for key, value in geometry.items() if value is None]
-            if missing:
-                raise ValueError(
-                    'Hyperion processing requires scene geometry parameters: '
-                    + ', '.join(missing)
-                )
-            try:
-                driver = hgrs.HyperionDriver(img_path)
-                l1_prod = driver.read(**geometry, geoproject=geoproject)
-            except Exception as e:
-                logger.exception('Could not read Hyperion input %s', img_path)
-                raise RuntimeError('Hyperion input could not be read') from e
-        elif sensor == 'tanager':
-            logger.info('Opening Tanager image')
-            try:
-                driver = hgrs.Driver("tanager")
-                l1_prod = driver.read_tanager(
-                    img_path,
-                    reflectance_unit=True,
-                    geoproject=geoproject,
-                )
-            except Exception as e:
-                logger.exception('Could not read Tanager input %s', img_path)
-                raise RuntimeError('Tanager input could not be read') from e
-        elif isinstance(img_path, str):
-            logger.info('Opening EnMAP image')
-
-            try:
-                driver = hgrs.Driver('enmap')
-                l1_prod = driver.read_l1c_enmap(img_path, reflectance_unit=True)
-            except:
-                logger.info('input file format not recognized, stop')
-                return
-        else:
-            logger.info('Opening PRISMA image')
-            print(img_path)
-            try:
-                driver = hgrs.Driver('prisma')
-
-                l1_prod = driver.read_prisma(img_path[0],
-                                             img_path[1],
-                                             reflectance_unit=True,
-                                             drop_vars=True,
-                                             geoproject=geoproject)
-            except Exception as e:
-                logger.info('input file format not recognized, stop')
-                raise RuntimeError from e
+        # EnMAP and PRISMA are both selected by the default sensor: PRISMA is given as [l1_path, l2c_path]
+        if sensor == 'enmap' and not isinstance(img_path, (str, os.PathLike)):
+            sensor = 'prisma'
+        driver = get_driver(sensor)
+        geometry = dict(sun_azimuth=sun_azimuth, sun_elevation=sun_elevation,
+                        satellite_inclination=satellite_inclination, look_angle=look_angle,
+                        view_azimuth=view_azimuth, view_zenith=view_zenith)
+        geometry = {name: geometry[name] for name in driver.geometry_args}
+        driver.check_geometry(**geometry)
+        options = dict(geoproject=geoproject, **geometry)
+        if ortho:
+            options['ortho'] = ortho
+        logger.info(f'Opening {driver.platform} image')
+        try:
+            l1_prod = driver.read(img_path, **options)
+        except Exception as e:
+            logger.exception('Could not read %s input %s', driver.platform, img_path)
+            raise RuntimeError(f'{driver.platform} input could not be read') from e
 
         # get L1C object
         self.l1_prod = l1_prod
+        self.driver = driver
 
         acquisition_time = driver.scene_metadata.acquisition_time
         if isinstance(acquisition_time, xr.DataArray):
@@ -690,14 +633,8 @@ class Process():
         # for the newly added sensor products. The default xarray chunking
         # splits Rrs across many spectral bands, so reading one QGIS band can
         # require decompressing a very large 3D chunk.
-        sensor = output_product.attrs.get('platform')
-        source_name = str(output_product.attrs.get('L1C_product_name', '')).lower()
-        if sensor not in {'Tanager', 'Hyperion', 'EMIT'}:
-            if 'basic_radiance_hdf5' in source_name:
-                sensor = 'Tanager'
-            elif source_name.endswith('.l1r'):
-                sensor = 'Hyperion'
-        if sensor in {'Tanager', 'Hyperion', 'EMIT'}:
+        driver = getattr(self, 'driver', None) or driver_for_platform(output_product.attrs.get('platform'))
+        if driver is not None and driver.tiled_output:
             height = output_product.sizes['y']
             width = output_product.sizes['x']
             encoding['Rrs']['chunksizes'] = (

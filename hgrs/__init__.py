@@ -18,8 +18,9 @@ from .utils import Reproj, Misc
 from .auxdata import AuxData, SolarIrradiance
 from .hgrs_kernel import Algo, WaterVapor, Aerosol, Product, Spectral
 from .hgrs_process import Process
-from .driver import Driver, HyperionDriver
-from .emit import EmitDriver
+from .drivers import (get_driver, EnmapDriver, PrismaDriver, TanagerDriver, EmitDriver,
+                      HyperionDriver)
+from .driver import Driver  # deprecated
 from .config import (
     AerosolCorrectionConfig,
     AerosolParameters,

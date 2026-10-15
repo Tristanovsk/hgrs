@@ -41,8 +41,8 @@ Processing steps
 ----------------
 
 1. **Level-1 image** (`TOA reflectance`_). EnMAP L1C or PRISMA L1 (with the angles of the L2C product,
-   and geoprojection onto a regular longitude-latitude grid) are read by
-   :py:class:`~hgrs.driver.Driver`.
+   and geoprojection onto a regular longitude-latitude grid) are read by the driver of the sensor
+   (:py:mod:`hgrs.drivers`).
 2. **Ancillary data.** The CAMS file, taken at the image center and the closest time, gives the surface
    pressure, the O\ :sub:`3`, NO\ :sub:`2` and CH\ :sub:`4` columns and the spectral AOD.
 3. **Aerosol model.** The OPAC model :math:`m` whose spectral AOD is closest to the CAMS one is

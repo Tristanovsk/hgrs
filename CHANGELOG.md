@@ -77,6 +77,13 @@ All notable changes to hGRS are listed here, most recent first. The format follo
 - `pyyaml`, `matplotlib`, `cartopy`, `docopt` and `dask` are declared dependencies; `importlib_resources`
   is no longer needed.
 - The development notebooks are no longer tracked.
+- Drivers in the `hgrs.drivers` subpackage, one module per sensor (`EnmapDriver`, `PrismaDriver`,
+  `EmitDriver`, `HyperionDriver`, `TanagerDriver`) with the common interface `L1Driver.read(img_path, ...)`;
+  `Process.execute` selects the driver by the `sensor` name (`hgrs.drivers.get_driver`), and each driver
+  declares its required geometry arguments and the chunking of its L2A product. `sensor='prisma'` can be
+  given explicitly. An unreadable EnMAP image raises an error instead of stopping silently.
+- `hgrs.Driver`, `hgrs.emit` and `hgrs.hyperion` are deprecated (kept with a `DeprecationWarning`);
+  `EmitDriver` and `HyperionDriver` take the image path in `read` (or, optionally, in the constructor).
 
 ### Fixed
 - `filter2d`: the window wrapped around the edges of the image and the mean was computed in place,

@@ -33,6 +33,30 @@ Processing chain
    hgrs.run_hyperion.main
    hgrs.run_tanager.main
 
+L1 drivers
+----------
+
+.. automodule:: hgrs.drivers
+   :no-members:
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+   hgrs.drivers.get_driver
+
+.. autosummary::
+   :toctree: generated
+   :template: autosummary/class.rst
+   :nosignatures:
+
+   hgrs.drivers.base.L1Driver
+   hgrs.drivers.EnmapDriver
+   hgrs.drivers.PrismaDriver
+   hgrs.drivers.EmitDriver
+   hgrs.drivers.HyperionDriver
+   hgrs.drivers.TanagerDriver
+
 Input data
 ----------
 
@@ -41,9 +65,6 @@ Input data
    :template: autosummary/class.rst
    :nosignatures:
 
-   hgrs.driver.Driver
-   hgrs.hyperion.HyperionDriver
-   hgrs.emit.EmitDriver
    hgrs.auxdata.AuxData
    hgrs.auxdata.SolarIrradiance
 
