@@ -62,6 +62,10 @@ All notable changes to hGRS are listed here, most recent first. The format follo
   bidirectional transmittance (A. Lavard-Meyer).
 - The configuration files moved to `hgrs/config/` (`default_config.yml`, `old_config.yml`).
 - The NaN-mean gap filling of the AOT uses two box filters instead of a Python call per pixel.
+- The final transmittance computed for the smoothed AOT of each mega-pixel
+  (`bidirectional_transmittance_global: false`) is interpolated and applied by blocks of 256 x 256
+  pixels, in place: no full-resolution transmittance cube (peak memory 20.3 -> 13.8 GB on an EnMAP
+  image, same product).
 - `Process.execute` no longer computes the AOT and atmospheric rasters twice (once in `execute`,
   once in `Aerosol.get_atmo_parameters`).
 - Each module logs through its own logger (`logging.getLogger(__name__)`); importing `hgrs` no

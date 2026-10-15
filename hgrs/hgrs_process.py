@@ -498,8 +498,18 @@ class Process():
                 Ttot_by_aot = Ttot_by_aot.assign_coords(aot_ref=aot_values)
                 Ttot = Ttot_by_aot.sel(aot_ref=aot_field.round(3), method='nearest')
                 Ttot = Ttot.drop_vars('aot_ref', errors='ignore').where(valid_aot)
-                Ttot = Ttot.interp(x=prod.raster.x, y=prod.raster.y)
-        l2_prod['Rrs'] = l2_prod.Rrs / Ttot
+        if 'x' in Ttot.dims:
+            # transmittance on the coarse grid, interpolated and applied by blocks (in place, float32):
+            # a full-resolution transmittance cube would double the memory of Rrs
+            Rrs = l2_prod.Rrs.data
+            for iy in range(0, height, chunk):
+                yc = min(height, iy + chunk)
+                for ix in range(0, width, chunk):
+                    xc = min(width, ix + chunk)
+                    Ttot_ = Ttot.interp(x=prod.raster.x[ix:xc], y=prod.raster.y[iy:yc])
+                    Rrs[:, iy:yc, ix:xc] /= Ttot_.transpose('wl', 'y', 'x').values
+        else:
+            l2_prod['Rrs'] = l2_prod.Rrs / Ttot
 
         # -----------------------------
         # construct output image
