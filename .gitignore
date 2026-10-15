@@ -130,6 +130,11 @@ pip-selfcheck.json
 
 .idea/
 
+# Local Hyperion/EO-1 reference scenes and generated preprocessing products
+data/hyperspectral/EO-1/
+test/test_hyperion/results/
+test/test_hyperion_fig/*.png
+
 ## File-based project format:
 *.iws
 

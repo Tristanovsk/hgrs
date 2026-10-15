@@ -34,7 +34,6 @@ Options:
 import os, sys
 from docopt import docopt
 import logging
-from osgeo import gdal
 
 from . import __package__, __version__
 from .hgrs_process import Process

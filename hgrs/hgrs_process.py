@@ -8,7 +8,6 @@ from tqdm.auto import tqdm
 
 import numpy as np
 import scipy.optimize as so
-import pandas as pd
 import xarray as xr
 
 import datetime as dt
@@ -16,20 +15,10 @@ import logging
 
 import hgrs.driver as driver
 import hgrs
-from .config import load_config
+from hgrs.config import behavior
 
 opj = os.path.join
 logger = logging.getLogger(__name__)
-
-config = load_config()
-
-HGRSDATA = config['path']['data_root']
-TOALUT = config['path']['toa_lut']
-TRANSLUT = config['path']['trans_lut']
-
-LUT_FILE = opj(HGRSDATA, TOALUT)
-TRANS_LUT_FILE = opj(HGRSDATA, TRANSLUT)
-
 
 class Process():
     '''
@@ -66,19 +55,21 @@ class Process():
     '''
 
     def __init__(self):
-        self.lut_file = opj(HGRSDATA, TOALUT)
-        self.trans_lut_file = opj(HGRSDATA, TRANSLUT)
-        # self.cams_dir = CAMS_PATH
-        # self.Nproc = NCPU
-        self.pressure_ref = 101500.
-        self.flags_tokeep = [3]
-        self.flags_tomask = [0, 1, 10, 13, 14, 18]
         self.successful = False
 
     def execute(self,
                 img_path,
                 cams_path,
-                aot_smoothing_blocks=3
+                *,
+                sensor='enmap',
+                geoproject=True,
+                sun_azimuth=None,
+                sun_elevation=None,
+                satellite_inclination=None,
+                look_angle=None,
+                view_azimuth=None,
+                view_zenith=None,
+                ortho=False,
                 ):
         r'''
         Run the processing chain. The result is stored in ``l2_prod`` (xarray.Dataset) and
@@ -86,9 +77,10 @@ class Process():
 
         Steps (see :py:mod:`hgrs.hgrs_kernel` for the equations):
 
-        1. **L1 image.** EnMAP L1C (``img_path`` is a directory) or PRISMA L1 + L2C for the angles
-           (``img_path`` is a list ``[l1_path, l2c_path]``), converted to TOA reflectance
-           (:py:class:`~hgrs.driver.Driver`).
+        1. **L1 image**, converted to TOA reflectance (:py:class:`~hgrs.driver.Driver`): EnMAP L1C
+           (``img_path`` is a directory), PRISMA L1 + L2C for the angles (``img_path`` is a list
+           ``[l1_path, l2c_path]``), or, with ``sensor``, EMIT L1B, Hyperion L1R or Tanager (scene
+           geometry given as parameters for EMIT and Hyperion).
         2. **CAMS.** Surface pressure, O\ :sub:`3`, NO\ :sub:`2` and CH\ :sub:`4` columns and AOD at the
            image center and acquisition time. The OPAC aerosol model :math:`m` whose spectral AOD is
            closest to CAMS is selected:
@@ -99,9 +91,11 @@ class Process():
               \left| \frac{\tau_{CAMS}(\lambda)}{\tau_{CAMS}(550)} - \tau_{a,m}(\lambda; \tau_{ref}=1) \right|,
               \quad \lambda \in \{469, 550, 670, 865, 1240\}\ \text{nm}
 
-        3. **Masks.** Clouds and cloud shadows (OmniCloudMask on the 670, 550 and 940 nm bands) and
-           water pixels (:py:meth:`~hgrs.hgrs_kernel.Product.apply_water_masks`).
-        4. **Coarse raster** of 20 x 20 pixels mega-pixels.
+        3. **Masks.** Clouds and cloud shadows (OmniCloudMask on the 670, 550 and 940 nm bands; only the
+           clouds are flagged in ``cloud_mask``) and water pixels
+           (:py:meth:`~hgrs.hgrs_kernel.Product.apply_water_masks`). For PRISMA, the land mask of the L2C
+           product also excludes pixels from the retrievals (not from the full resolution correction).
+        4. **Coarse raster** of mega-pixels (20 x 20 pixels by default, ``x_coarsen``, ``y_coarsen``).
         5. **Gaseous absorption** (:math:`T_g`), then **water vapor** retrieval and correction
            (:math:`T_{wv}`). The bands of strong absorption (``wl_to_remove``) and with
            :math:`T_g T_{wv} < 0.5` are removed.
@@ -112,19 +106,27 @@ class Process():
 
               0.002 \leq \tau_{ref} \leq \bar\tau_{CAMS}(550) + 2 \max\left(s_{CAMS},\ 0.2\, \bar\tau_{CAMS}(550) + 0.05\right)
 
-           where :math:`s_{CAMS}` is the standard deviation of the CAMS AOD. The AOT is then smoothed: mean
-           over ``aot_smoothing_blocks`` x ``aot_smoothing_blocks`` mega-pixels weighted by their number of
-           water pixels, then NaN-mean over 3 x 3 mega-pixels to fill the gaps.
+           where :math:`s_{CAMS}` is the standard deviation of the CAMS AOD. The AOT is then smoothed and
+           gap-filled according to the ``aerosol: smoothing_method`` of the configuration
+           (:py:meth:`~hgrs.hgrs_kernel.Aerosol.smoothing`).
         7. **Full resolution** correction, by blocks of 256 x 256 pixels: gaseous and water vapor
            transmittances, diffuse atmospheric reflectance, sunglint and transmittances, giving
            :math:`R_{rs}(\lambda)`.
 
-        :param img_path: path of the EnMAP L1C directory, or list ``[l1_path, l2c_path]`` of the PRISMA
-            L1 and L2C files
-        :param cams_path: path of the CAMS NetCDF file covering the acquisition
-        :param aot_smoothing_blocks: size, in mega-pixels of the coarse raster (one AOT retrieval each), of
-            the window of the weighted mean of the AOT (3: each mega-pixel is averaged with its neighbours;
-            1: no smoothing)
+        :param img_path: path of the EnMAP L1C directory, list ``[l1_path, l2c_path]`` of the PRISMA
+            L1 and L2C files, or path of the EMIT, Hyperion or Tanager image
+        :param cams_path: path of the CAMS NetCDF file covering the acquisition (forecast or reanalysis)
+        :param sensor: ``'enmap'`` (EnMAP or PRISMA, from ``img_path``), ``'emit'``, ``'hyperion'`` or
+            ``'tanager'``
+        :param geoproject: reproject the image on a map grid; if False, keep the native pixel grid with
+            the 2D ``lon`` / ``lat`` arrays
+        :param sun_azimuth: solar azimuth angle (degrees), EMIT and Hyperion
+        :param sun_elevation: solar elevation angle (degrees), EMIT and Hyperion
+        :param satellite_inclination: orbit inclination (degrees), Hyperion
+        :param look_angle: look angle (degrees), Hyperion
+        :param view_azimuth: viewing azimuth angle (degrees), EMIT
+        :param view_zenith: viewing zenith angle (degrees), EMIT
+        :param ortho: map the EMIT image with the GLT grid of the product (exclusive with ``geoproject``)
         '''
 
         # ---------------------------------------
@@ -134,7 +136,61 @@ class Process():
         # action = 'load L1C image plus angle rasters'
         # pbar = tqdm(total=len(action),
         #             desc=action + f": {img_path} ")
-        if isinstance(img_path, str):
+        if sensor == 'emit':
+            logger.info('Opening EMIT L1B radiance image')
+            geometry = {
+                'sun_azimuth': sun_azimuth,
+                'sun_elevation': sun_elevation,
+                'view_azimuth': view_azimuth,
+                'view_zenith': view_zenith,
+            }
+            missing = [key for key, value in geometry.items() if value is None]
+            if missing:
+                raise ValueError(
+                    'EMIT processing requires scene geometry parameters: '
+                    + ', '.join(missing)
+                )
+            try:
+                driver = hgrs.Driver('emit')
+                l1_prod = driver.read_emit(
+                    img_path, **geometry, geoproject=geoproject, ortho=ortho,
+                )
+            except Exception as e:
+                logger.exception('Could not read EMIT input %s', img_path)
+                raise RuntimeError('EMIT input could not be read') from e
+        elif sensor == 'hyperion':
+            logger.info('Opening Hyperion L1R image')
+            geometry = {
+                'sun_azimuth': sun_azimuth,
+                'sun_elevation': sun_elevation,
+                'satellite_inclination': satellite_inclination,
+                'look_angle': look_angle,
+            }
+            missing = [key for key, value in geometry.items() if value is None]
+            if missing:
+                raise ValueError(
+                    'Hyperion processing requires scene geometry parameters: '
+                    + ', '.join(missing)
+                )
+            try:
+                driver = hgrs.HyperionDriver(img_path)
+                l1_prod = driver.read(**geometry, geoproject=geoproject)
+            except Exception as e:
+                logger.exception('Could not read Hyperion input %s', img_path)
+                raise RuntimeError('Hyperion input could not be read') from e
+        elif sensor == 'tanager':
+            logger.info('Opening Tanager image')
+            try:
+                driver = hgrs.Driver("tanager")
+                l1_prod = driver.read_tanager(
+                    img_path,
+                    reflectance_unit=True,
+                    geoproject=geoproject,
+                )
+            except Exception as e:
+                logger.exception('Could not read Tanager input %s', img_path)
+                raise RuntimeError('Tanager input could not be read') from e
+        elif isinstance(img_path, str):
             logger.info('Opening EnMAP image')
 
             try:
@@ -152,93 +208,118 @@ class Process():
                 l1_prod = driver.read_prisma(img_path[0],
                                              img_path[1],
                                              reflectance_unit=True,
-                                             drop_vars=True)
-            except:
+                                             drop_vars=True,
+                                             geoproject=geoproject)
+            except Exception as e:
                 logger.info('input file format not recognized, stop')
-                return
+                raise RuntimeError from e
 
         # get L1C object
         self.l1_prod = l1_prod
 
-        date = l1_prod.time
-        raster = l1_prod.sza.rio.reproject(4326)
-        clon, clat = float(raster.x.mean()), float(raster.y.mean())
+        acquisition_time = driver.scene_metadata.acquisition_time
+        if isinstance(acquisition_time, xr.DataArray):
+            acquisition_time = acquisition_time.values
+        if isinstance(acquisition_time, np.ndarray):
+            if acquisition_time.size != 1:
+                raise ValueError('Scene acquisition time must be scalar')
+            acquisition_time = acquisition_time.reshape(-1)[0]
+        # CAMS timestamps are UTC and timezone-naive. Normalize Python
+        # timezone-aware datetimes to naive UTC, then use NumPy datetime64 for
+        # selection against xarray's decoded time coordinate.
+        if isinstance(acquisition_time, dt.datetime):
+            if acquisition_time.tzinfo is not None:
+                acquisition_time = acquisition_time.astimezone(
+                    dt.timezone.utc
+                ).replace(tzinfo=None)
+            date = np.datetime64(acquisition_time, 'us')
+        else:
+            date = np.datetime64(acquisition_time)
+        if geoproject:
+            raster = l1_prod.sza.rio.reproject(4326)
+            clon, clat = float(raster.x.mean()), float(raster.y.mean())
+        else:
+            clon = float(l1_prod.lon.mean())
+            clat = float(l1_prod.lat.mean())
         # pbar.refresh()
 
         # -----------------------------------------
-        # Create hGRS object
+        # Load CAMS data for this scene
         # -----------------------------------------
-        logger.info('Create hGRS object')
-        prod = hgrs.Algo(l1_prod, xcoarsen=20, ycoarsen=20)
-        prod.round_angles()
-
-        # -----------------------------------------
-        # get CAMS and set atmospheric parameters
-        # -----------------------------------------
-        logger.info('get CAMS and set atmospheric parameters')
-        # lazy loading
-        cams = xr.open_dataset(cams_path, decode_cf=True,
-                               chunks={'time': 1, 'x': 500, 'y': 500})
+        logger.info('get CAMS data for scene')
+        # Reanalysis files use ``valid_time`` while forecast files use ``time``
+        # (or forecast_period/forecast_reference_time before normalization).
+        # Do not request chunks for a dimension that may not exist.
+        cams = xr.open_dataset(cams_path, decode_cf=True)
 
         # fix for new ADS format (sept 2024)
         if ('forecast_period' in cams.dims) & ('forecast_reference_time' in cams.dims):
             cams = cams.stack(time_buffer=['forecast_period', 'forecast_reference_time']).swap_dims(
                 {'time_buffer': 'valid_time'}).sortby('valid_time').rename(
                 {'valid_time': 'time'}).drop_vars(['time_buffer'])
+        elif 'time' not in cams.dims and 'valid_time' in cams.dims: # reanalysis
+            cams = cams.rename({'valid_time': 'time'})
 
-        # slicing
+        # Match the selection scalar to the decoded CAMS coordinate dtype.
+        # Use the same datetime unit as decoded CAMS files where supported.
+        cams_time_dtype = cams.time.dtype
+        if np.issubdtype(cams_time_dtype, np.datetime64):
+            date = date.astype(cams_time_dtype)
         cams = cams.sel(time=date, method='nearest')
         cams = cams.sel(latitude=clat, longitude=clon, method='nearest')
 
-        # select OPAC aerosol model
-        # aod = cams[['aod355', 'aod380', 'aod400', 'aod440', 'aod469', 'aod500', 'aod550', 'aod645', 'aod670',
-        #            'aod800', 'aod865', 'aod1020', 'aod1064', 'aod1240', 'aod1640', 'aod2130']].to_pandas()
-        # aod.index = aod.index.str.replace('aod', '').astype(int)
-        # cams_aod = aod.to_xarray().rename({'index': 'wl'})
-        cams_wls = [469, 550, 670, 865, 1240]
-        param_aod = []
-        for wl in cams_wls:
-            wl_ = str(wl)
-            param_aod.append('aod' + wl_)
-
-        cams_aod = cams[param_aod].to_array(dim='wl')
-
-        wl_cams = cams_aod.wl.str.replace('aod', '').astype(float)
-        cams_aod = cams_aod.assign_coords(wl=wl_cams)
-
-        # new LUT:
-        lut_aod = prod.aero_lut.aot.sel(aot_ref=1).interp(wl=cams_aod.wl)
-        idx = np.abs((cams_aod / cams.aod550) - lut_aod).sum('wl').argmin()
-        opac_model = prod.aero_lut.model.values[idx]
-        logger.info('OPAC model: ' + opac_model)
-
-        # set gases and pressure
-        prod.pressure = float(cams.sp) * 1e-2
-        prod.to3c = float(cams.gtco3)
-        prod.tno2c = float(cams.tcno2)
-        prod.tch4c = float(cams.tc_ch4)
+        # -----------------------------------------
+        # Create hGRS object
+        # -----------------------------------------
+        logger.info('Create hGRS object')
+        prod = hgrs.Algo(
+            l1_prod,
+            cams,
+            scene_metadata=driver.scene_metadata,
+            sensor_description=driver.sensor_description,
+        )
+        prod.round_angles()
 
         # -----------------------------------------
         # Apply cloud, water masking
         # -----------------------------------------
 
-        # TODO put omnimask settins (bands) in config.yml
+        # TODO put omnimask settings (bands) in default_config.yml
         logger.info('Apply omnicloudmask')
         red_index = 670
         green_index = 550
         nir_index = 940
-        rgnir = prod.raster.Rtoa.sel(wl=[red_index, green_index, nir_index], method='nearest').fillna(0)  # .values
+        rgnir = prod.raster.Rtoa.sel(
+            wl=[red_index, green_index, nir_index], method='nearest'
+        ).fillna(0)
         omnimask = prod.get_omnicloudmask(rgnir)
-        prod.raster['Rtoa'] = prod.raster['Rtoa'].where(omnimask == 0)
-
+        # OmniCloudMask classes 1 and 2 are thick/thin cloud; class 3 is
+        # cloud shadow and is intentionally not labeled as cloud here.
+        prod.raster['cloud_mask'] = (omnimask.isin([1, 2])).rename('cloud_mask')
+        prod.raster['cloud_mask'].attrs.update(
+            long_name='cloud mask',
+            description='True for OmniCloudMask thick or thin cloud pixels; False otherwise',
+        )
         logger.info('Apply water masking')
         prod.apply_water_masks()
+        # Evaluate spectral water tests on the original Rtoa values so a cloud
+        # classification does not change the independent water-mask meaning.
+        prod.raster['Rtoa'] = prod.raster['Rtoa'].where(omnimask == 0)
+        # Keep the non-land-masked radiance for full-resolution correction;
+        # the land mask is only used to select pixels for retrievals.
+        if driver.sensor_description.name == "PRISMA":
+            full_resolution_rtoa = prod.raster.Rtoa.copy(deep=True)
+            prod.apply_land_mask()
 
         # -----------------------------------------
         # Construct coarse resolution raster
         # -----------------------------------------
         logger.info('Construct coarse resolution raster')
         prod.get_coarse_masked_raster()
+        if driver.sensor_description.name == "PRISMA":
+
+            prod.raster['Rtoa'] = full_resolution_rtoa
+            del full_resolution_rtoa
         # prod.plot_water_pix_number()
 
         # -----------------------------------------
@@ -274,21 +355,11 @@ class Process():
         prod.coarse_masked_raster[variable] = prod.coarse_masked_raster[variable].where(Tg_tot > 0.5, drop=True)
         prod.raster[variable] = prod.raster[variable].where(Tg_tot > 0.5, drop=True)
 
-        # TODO double check regularization from CAMS AOT values
-        aod550_mean = cams.aod550.mean().values
-
-        aod550_std = cams.aod550.std().values
-        aod550_std = np.max([aod550_std, 0.2 * aod550_mean + 0.05])
-        aot550_min = 0.002  # np.max([aod550_mean - 2*aod550_std,0.001])
-        aero_retrieval = hgrs.Aerosol(prod,
-                                      aerosol_model=opac_model,
-                                      first_guess=[aod550_mean, 0.],
-                                      aot550_limits=[aot550_min,
-                                                     aod550_mean + 2 * aod550_std])
+        aerosol_state = prod.aerosol_parameters
+        self.aerosol_parameters = aerosol_state
+        aero_retrieval = hgrs.Aerosol(prod)
         aero_retrieval.solve()
-        # smoothing of aot_ref over aot_smoothing_blocks x aot_smoothing_blocks mega-pixels, then
-        # atmospheric parameters (aot, Rtoa_diff, Tdir) on the coarse grid
-        aero_retrieval.get_atmo_parameters(prod, windows=np.array([aot_smoothing_blocks, aot_smoothing_blocks]))
+        aero_retrieval.get_atmo_parameters(prod)
         self.aero_retrieval = aero_retrieval
 
         # ------------------------------------------
@@ -302,10 +373,17 @@ class Process():
         # ------------------------------------------
         # water vapor
         # ------------------------------------------
+        logger.info('Begin water vapor correction')
         chunk = 256
         height, width, Nwl = len(prod.raster.y), len(prod.raster.x), len(prod.raster.wl)
-        results = np.full((height, width), 0, dtype=np.float32)
         variable = 'Rtoa'
+        logger.info(
+            'Full-resolution water-vapor correction starts: '
+            'Rtoa shape=%s, Twv shape=%s, chunk=%d',
+            prod.raster[variable].shape,
+            prod.Twv_raster.shape,
+            chunk,
+        )
         for iy in range(0, height, chunk):
             yc = min(height, iy + chunk)
             if yc > height:
@@ -315,12 +393,15 @@ class Process():
                 if xc > width:
                     continue
                 raster = prod.raster[variable][:, iy:yc, ix:xc]
+
                 Twv_raster = prod.Twv_raster.interp(x=raster.x, y=raster.y)
+
                 prod.raster[variable].data[:, iy:yc, ix:xc] = raster / Twv_raster
 
         Rdiff_full = aero_retrieval.atmo_img.Rtoa_diff  # .interp(x=prod.raster.x, y=prod.raster.y)
         Tdir_full = aero_retrieval.atmo_img.Tdir  # .interp(x=prod.raster.x, y=prod.raster.y)
-        wl_sunglint = prod.wl_sunglint
+        wl_sunglint = prod.water_parameters.wl_sunglint
+        logger.info('Begin aerosol correction and sunglint removal')
 
         Rrs = np.full((Nwl, height, width), np.nan, dtype=np.float32)
         BRDF_sunglint = np.full((height, width), np.nan, dtype=np.float32)
@@ -358,23 +439,62 @@ class Process():
                                          y=prod.raster.y,
                                          wl=prod.raster.wl),
                              )
+        # Preserve native PRISMA geolocation in the L2A file when processing
+        # without reprojection, so the product can be projected later.
+        if not geoproject:
+            missing_geolocation = {
+                name for name in ('lon', 'lat') if name not in prod.raster
+            }
+            if missing_geolocation:
+                raise ValueError(
+                    'Native-geometry output requires source geolocation arrays; '
+                    f'missing {sorted(missing_geolocation)}'
+                )
+            l2_prod['lon'] = prod.raster.lon
+            l2_prod['lat'] = prod.raster.lat
+            l2_prod['lon'].attrs.update(long_name='longitude', units='degrees_east')
+            l2_prod['lat'].attrs.update(long_name='latitude', units='degrees_north')
 
-        # finally correct for down and upward transmittances
-        # TODO compute pixel wise
-        Ttot_Ed = xr.open_dataset(TRANS_LUT_FILE).isel(wind=1)
-        Ttot_Ed['wl'] = Ttot_Ed['wl'] * 1e3
+        logger.info('Final transmittance correction')
 
+        # Apply down/up transmittance using the configured spatial scope.
         aot_ref = float(aero_retrieval.aero_img.aot_ref.mean())
         wl = l2_prod.Rrs.wl.values
         sza = float(aero_retrieval.sza)
         vza = float(aero_retrieval.vza)
-        Ttot_Ed_ = Ttot_Ed.Ttot_Ed.sel(model=opac_model).interp(sza=sza, method='cubic'
-                                                                ).interp(aot_ref=aot_ref, method='quadratic').interp(
-            wl=wl, method='cubic')
-        Ttot_Lu_ = Ttot_Ed.Ttot_Ed.sel(model=opac_model).interp(sza=vza, method='cubic'
-                                                                ).interp(aot_ref=aot_ref, method='quadratic').interp(
-            wl=wl, method='cubic') ** 1.05
-        Ttot = (Ttot_Ed_ * Ttot_Lu_).reset_coords(drop=True)
+        aerosol_model = aerosol_state.aerosol_model
+        Ttot_lut = prod.lut_tables.Ttot_Ed.Ttot_Ed.sel(model=aerosol_model)
+        if prod.atmospheric_correction.bidirectional_transmittance_global:
+            Ttot_Ed_ = Ttot_lut.interp(sza=sza, method='cubic').interp(
+                aot_ref=aot_ref, method='quadratic'
+            ).interp(wl=wl, method='cubic')
+            Ttot_Lu_ = Ttot_lut.interp(sza=vza, method='cubic').interp(
+                aot_ref=aot_ref, method='quadratic'
+            ).interp(wl=wl, method='cubic') ** 1.05
+            Ttot = (Ttot_Ed_ * Ttot_Lu_).reset_coords(drop=True)
+        else:
+            assert not behavior.PREVIOUS_BEHAVIOR
+            aot_field = aero_retrieval.aero_img.aot_ref_smoothed
+            valid_aot = aot_field.notnull()
+            aot_values = np.unique(aot_field.values[valid_aot.values])
+            if aot_values.size == 0:
+                Ttot = xr.full_like(l2_prod.Rrs, np.nan)
+            else:
+                # Evaluate each distinct AOT once; LUT interpolation with a
+                # spatially varying xarray target creates colliding dimensions.
+                aot_da = xr.DataArray(aot_values, dims='aot_ref', coords={'aot_ref': aot_values})
+                Ttot_Ed_ = Ttot_lut.interp(sza=sza, method='cubic').interp(
+                    aot_ref=aot_da, method='quadratic'
+                ).interp(wl=wl, method="cubic")
+                Ttot_Lu_ = Ttot_lut.interp(sza=vza, method='cubic').interp(
+                    aot_ref=aot_da, method='quadratic'
+                ).interp(wl=wl, method="cubic")
+
+                Ttot_by_aot = Ttot_Ed_ * Ttot_Lu_**1.05
+                Ttot_by_aot = Ttot_by_aot.assign_coords(aot_ref=aot_values)
+                Ttot = Ttot_by_aot.sel(aot_ref=aot_field.round(3), method='nearest')
+                Ttot = Ttot.drop_vars('aot_ref', errors='ignore').where(valid_aot)
+                Ttot = Ttot.interp(x=prod.raster.x, y=prod.raster.y)
         l2_prod['Rrs'] = l2_prod.Rrs / Ttot
 
         # -----------------------------
@@ -386,12 +506,26 @@ class Process():
         # data
         wv = wv_retrieval.water_vapor.rename({"x": "xc", "y": "yc"})
         aero = aero_retrieval.aero_img.rename({"x": "xc", "y": "yc"})
-        water_pixel_prop = (prod.coarse_masked_raster.water_pixel_number / prod.Npix_per_megapix).drop_vars(
-            'tcwv').rename({"x": "xc", "y": "yc"})
+        water_pixel_number = prod.coarse_masked_raster.water_pixel_number
+        if 'tcwv' in water_pixel_number.coords:
+            water_pixel_number = water_pixel_number.drop_vars('tcwv')
+        water_pixel_prop = (
+            water_pixel_number / prod.Npix_per_megapix
+        ).rename({"x": "xc", "y": "yc"})
         water_pixel_prop.name = 'water_pix_prop'
+        # Rrs can retain the TCWV lookup target as an auxiliary coordinate.
+        # The retrieved coarse-grid TCWV is merged below as a data variable.
+        if 'tcwv' in l2_prod.coords:
+            l2_prod = l2_prod.drop_vars('tcwv')
         # geom = prod.raster[['lon', 'lat']].drop_vars('tcwv')
         # Rrs_ = Rrs_l2.reset_coords().drop_vars(['model', 'z']).rename({'tcwv': 'tcwv_full', 'aot_ref': 'aot_ref_full'}).set_coords(['time','spatial_ref'])
         l2_prod = xr.merge([l2_prod, wv, aero, water_pixel_prop])
+        for mask_name in ('water_mask', 'cloud_mask'):
+            l2_prod[mask_name] = prod.raster[mask_name].astype(bool)
+        if "landcover_mask" in prod.raster:
+            l2_prod["landcover_mask"] = prod.raster.landcover_mask
+        if hasattr(prod, "land_mask"):
+            l2_prod["land_mask"] = prod.land_mask
         # l2_prod['brdfg_full'] = BRDF_sunglint
 
         param = 'Rrs'
@@ -450,14 +584,15 @@ class Process():
         l2_prod['pressure'].attrs['description'] = 'Atmospheric pressure at the surface level'
         l2_prod['pressure'].attrs['source'] = 'computed from CAMS and DEM (see DEM metadata)'
 
+        product_parameters = prod.return_dictionary()
         param = 'to3c'
-        l2_prod[param] = prod.__dict__[param]
+        l2_prod[param] = product_parameters[param]
         l2_prod[param].attrs['unit'] = ''
         l2_prod[param].attrs['description'] = 'Total columnar ozone concentration'
         l2_prod[param].attrs['source'] = 'CAMS'
 
         param = 'tno2c'
-        l2_prod[param] = prod.__dict__[param]
+        l2_prod[param] = product_parameters[param]
         l2_prod[param].attrs['unit'] = ''
         l2_prod[param].attrs['description'] = 'Total columnar Nitrogen dioxide concentration'
         l2_prod[param].attrs['source'] = 'CAMS'
@@ -471,17 +606,9 @@ class Process():
         l2_prod.attrs['description'] = 'PRISMA L2A-hGRS cube data'
         l2_prod.attrs['DEM'] = 'not available'
         l2_prod.attrs['aerosol_model'] = aero_retrieval.aerosol_model
-        keys = ['wl_water_vapor', 'wl_sunglint', 'wl_atmo', 'wl_to_remove', 'wl_non_neg', 'wl_green', 'wl_nir',
-                'wl_1600', 'wl_rgb',
-                'xcoarsen', 'ycoarsen', 'Npix_per_megapix', 'block_size', 'pixel_percentage', 'pixel_threshold',
-                'ang_resol', 'abs_gas_file', 'lut_file', 'water_vapor_transmittance_file',
-                'sunglint_threshold',
-                'ndwi_threshold', 'green_swir_index_threshold', 'pressure', 'to3c', 'tno2c', 'tch4c', 'psl',
-                'coef_abs_scat',
-                'altitude']
-        for key in keys:
-            print(key)
-            l2_prod.attrs[key] = str(prod.__dict__[key])
+        l2_prod.attrs['geoprojection'] = 'native' if not geoproject else 'reprojected'
+        for key, value in product_parameters.items():
+            l2_prod.attrs[key] = str(value)
 
         self.l2_prod = l2_prod
         self.successful = True
@@ -522,6 +649,19 @@ class Process():
             'tcwv_std': {'dtype': 'int16', 'scale_factor': 0.01, '_FillValue': -9999, "zlib": True,
                          "complevel": complevel}}
 
+        for mask_name in (
+            'water_mask',
+            'cloud_mask',
+            'water_validity_mask',
+            'aerosol_validity_mask',
+            'water_vapor_validity_mask',
+            'aerosol_retrieval_validity_mask',
+        ):
+            if mask_name in self.l2_prod:
+                encoding[mask_name] = {
+                    'dtype': 'uint8', 'zlib': True, 'complevel': complevel
+                }
+
         # clean up before exporting netcdf output
         if os.path.exists(ofile):
             os.remove(ofile)
@@ -530,6 +670,58 @@ class Process():
         if not os.path.exists(odir):
             os.mkdir(odir)
 
-        self.l2_prod.sel(wl=slice(400, 1150)).to_netcdf(ofile, encoding=encoding)
+        output_product = self.l2_prod.sel(wl=slice(400, 1150))
+
+        # Keep NetCDF raster chunks small and CF coordinate variables clean
+        # for the newly added sensor products. The default xarray chunking
+        # splits Rrs across many spectral bands, so reading one QGIS band can
+        # require decompressing a very large 3D chunk.
+        sensor = output_product.attrs.get('platform')
+        source_name = str(output_product.attrs.get('L1C_product_name', '')).lower()
+        if sensor not in {'Tanager', 'Hyperion', 'EMIT'}:
+            if 'basic_radiance_hdf5' in source_name:
+                sensor = 'Tanager'
+            elif source_name.endswith('.l1r'):
+                sensor = 'Hyperion'
+        if sensor in {'Tanager', 'Hyperion', 'EMIT'}:
+            height = output_product.sizes['y']
+            width = output_product.sizes['x']
+            encoding['Rrs']['chunksizes'] = (
+                1, min(256, height), min(256, width)
+            )
+            if 'brdfg_full' in output_product:
+                encoding['brdfg_full'] = {
+                    'dtype': 'int16', 'scale_factor': 0.00001,
+                    'add_offset': .2, '_FillValue': -32768, 'zlib': True,
+                    'complevel': complevel,
+                    'chunksizes': (min(256, height), min(256, width)),
+                }
+
+
+            # Re-encoding an opened NetCDF dataset can otherwise preserve its
+            # old auxiliary-coordinate list, including the scalar variables
+            # removed above. Let xarray rebuild coordinates from the current
+            # dataset structure.
+            for variable in output_product.variables.values():
+                variable.encoding.pop('coordinates', None)
+            # CF coordinate variables should not use a NaN _FillValue.
+            for coordinate in ('x', 'y', 'wl', 'xc', 'yc'):
+                if coordinate in output_product.coords:
+                    encoding[coordinate] = {'_FillValue': None}
+
+        # NetCDF attributes do not support boolean values. Correction helpers
+        # attach boolean flags to variables, and xarray carries those attrs
+        # into the final product. Store them as the equivalent 0/1 byte.
+        def netcdf_safe_attrs(attrs):
+            return {
+                key: np.int8(value) if isinstance(value, (bool, np.bool_)) else value
+                for key, value in attrs.items()
+            }
+
+        output_product.attrs = netcdf_safe_attrs(output_product.attrs)
+        for variable in output_product.variables.values():
+            variable.attrs = netcdf_safe_attrs(variable.attrs)
+
+        output_product.to_netcdf(ofile, encoding=encoding)
         # l2_prod.close()
         return

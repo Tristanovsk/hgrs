@@ -46,17 +46,16 @@ Spectral convolution
 
 Spectrally resolved quantities :math:`X(\lambda)` (solar irradiance, gaseous transmittance) are
 integrated over the spectral response function :math:`S_i` of each band :math:`i`
-(:py:meth:`Spectral.convolve`):
+(:py:mod:`hgrs.spectral_sensitivity`):
 
 .. math::
 
-   X_i = \frac{\int X(\lambda)\, S_i(\lambda)\, d\lambda}{\int S_i(\lambda)\, d\lambda},
-   \qquad
-   S_i(\lambda) = \exp\left(-\frac{|\lambda - \lambda_i|^p}{2\sigma_i^p}\right)
+   X_i = \frac{\int X(\lambda)\, S_i(\lambda)\, d\lambda}{\int S_i(\lambda)\, d\lambda}
 
-with :math:`p = 2` (Gaussian) or :math:`p \neq 2` (super-Gaussian, :py:meth:`Spectral.convolve2`), and
-:math:`\sigma_i` derived from the full width at half maximum :math:`\Gamma_i` of the band
-(see :py:func:`Gamma2sigma` and :py:func:`super_gaussian_fwhm2sigma`).
+with a Gaussian :math:`S_i` (:py:class:`hgrs.spectral_sensitivity.Gaussian`, solar irradiance) or a
+super-Gaussian of exponent 3 (:py:class:`hgrs.spectral_sensitivity.SuperGaussian`, gaseous
+transmittance), whose width is derived from the full width at half maximum :math:`\Gamma_i` of the band.
+The former implementation is kept in :py:mod:`hgrs.legacy.spectral`.
 
 Gaseous absorption
 ------------------
@@ -221,7 +220,6 @@ algorithm [Harmel2018]_. The optimizations use the trust-region reflective metho
 '''
 
 import os
-from importlib.resources import files
 
 import numpy as np
 import pandas as pd
@@ -242,21 +240,19 @@ import logging
 from omnicloudmask import predict_from_array
 
 from . import AuxData
-from .config import load_config
-
+from .config import behavior
+from .lut_tables import LUTTables
+from .spectral_sensitivity import SuperGaussian
+from .config import (
+    AerosolParameters,
+    AppConfig,
+    get_app_config,
+    SceneMetadata,
+    SensorDescription,
+    WaterParameters,
+)
 opj = os.path.join
 logger = logging.getLogger(__name__)
-
-config = load_config()
-
-HGRSDATA = config['path']['data_root']
-TOALUT = config['path']['toa_lut']
-TRANSLUT = config['path']['trans_lut']
-
-LUT_FILE = opj(HGRSDATA, TOALUT)
-TRANS_LUT_FILE = opj(HGRSDATA, TRANSLUT)
-ABS_GAS_FILE = str(files(__package__).joinpath('data/lut/lut_abs_opt_thickness_normalized.nc'))
-WATER_VAPOR_TRANSMITTANCE_FILE = str(files(__package__).joinpath('data/lut/water_vapor_transmittance.nc'))
 
 
 class Product():
@@ -302,124 +298,233 @@ class Product():
     '''
 
     def __init__(self,
-                 l1c_obj=None,
-                 xcoarsen=20,
-                 ycoarsen=20,
-                 expon=2):
+                 l1c_obj,
+                 cams_data: xr.Dataset,
 
-        # spectral parameters
-        self.wl_water_vapor = slice(800, 1300)
-        self.wl_sunglint = slice(2150, 2250)
-        # self.wl_atmo = slice(950, 2450)
-        self.wl_atmo = [1000, 1050, 1075, 1100, 1200, 1300, 1600, 1650, 1700, 2150, 2200, 2250]
-        self.wl_non_neg = [430, 490, 560, 650, 750, 800, 865, 1020]
-        self.wl_to_remove = [(935, 967), (1105, 1170), (1320, 1490), (1778, 2033), (2465, 2550)]
-        self.wl_green = slice(540, 570)
-        self.wl_nir = slice(850, 882)
-        self.wl_1600 = slice(1580, 1650)
+                 xcoarsen: int = None,
+                 ycoarsen: int = None,
+                 expon=2,
+                 *,
+                 app_config: AppConfig = None,
+                 scene_metadata: SceneMetadata = None,
+                 sensor_description: SensorDescription = None,
+    ):
+
+        self.config = get_app_config() if app_config is None else app_config
+        self.atmospheric_correction = self.config.atmospheric_correction
+        product_config = self.config.atmospheric_correction.product
+        aerosol_config = self.config.atmospheric_correction.aerosol
+
+
+
+        self.wl_to_remove = list(aerosol_config.excluded_wavelength_ranges_nm)
         self.wl_rgb = [30, 20, 10]
 
         # image chunking and coarsening parameters
+        xcoarsen = product_config.x_coarsen if xcoarsen is None else xcoarsen
+        ycoarsen = product_config.y_coarsen if ycoarsen is None else ycoarsen
         self.xcoarsen = xcoarsen
         self.ycoarsen = ycoarsen
         self.Npix_per_megapix = self.xcoarsen * self.ycoarsen
-        self.block_size = 2
+        self.block_size = product_config.block_size
         # minimum percentage of water pixel within the mega-pixel to enable processing
-        self.pixel_percentage = 20
+        self.pixel_percentage = product_config.water_pixel_percentage
         self.pixel_threshold = self.pixel_percentage / 100 * self.Npix_per_megapix
 
         # number of digits to keep for angle values
-        self.ang_resol = 1
+        self.ang_resol = product_config.angle_rounding_digits
 
-        # pre-computed auxiliary data
-        self.lut_file = LUT_FILE
-        self.trans_lut_file = TRANS_LUT_FILE
-        self.abs_gas_file = ABS_GAS_FILE
-        self.water_vapor_transmittance_file = WATER_VAPOR_TRANSMITTANCE_FILE
 
-        # mask thresholding parameters
-        self.sunglint_threshold = 0.11
-        self.ndwi_threshold = 0.01
-        self.green_swir_index_threshold = 0.1
-
-        # atmosphere auxiliary data
-        # TODO get them from CAMS
-        self.pressure = 1010
-        self.to3c = 6.5e-3
-        self.tno2c = 3e-6
-        self.tch4c = 1e-2
+        # CAMS-derived atmosphere auxiliary data
+        self.cams_data = cams_data
+        self.pressure = float(cams_data.sp) * 1e-2
+        self.to3c = float(cams_data.gtco3)
+        self.tno2c = float(cams_data.tcno2)
+        self.tch4c = float(cams_data.tc_ch4)
         self.psl = 1013
-        self.coef_abs_scat = .35
-
         self.altitude = 0
+        self.coef_abs_scat = product_config.gas_absorption_scattering_coefficient
 
-        # xarray object to be processed
         self.raster = l1c_obj.copy()
+
+        # metadata objects
+        self.scene_metadata = (
+            scene_metadata
+            if scene_metadata is not None
+            else SceneMetadata.from_raster(self.raster)
+        )
+        lut_file = str(self.config.resolve_lut('toa'))
+        trans_lut_file = str(self.config.resolve_lut('transmittance'))
+        abs_gas_file = str(self.config.resolve_lut('abs_gas'))
+        self.lut_tables = LUTTables(
+            lut_file=lut_file,
+            trans_lut_file=trans_lut_file,
+            abs_gas_file=abs_gas_file,
+        )
+        self.aero_lut = self.lut_tables.aero_lut
+        self.water_parameters = WaterParameters(
+            mask=product_config,
+            vapor=self.config.atmospheric_correction.water_vapor,
+        )
+        # Preserve the established Product parameter attributes for callers
+        # that still access them directly; config objects remain authoritative.
+        self.wl_water_vapor = self.water_parameters.wl_water_vapor
+        self.wl_sunglint = self.water_parameters.wl_sunglint
+        self.wl_green = self.water_parameters.wl_green
+        self.wl_nir = self.water_parameters.wl_nir
+        self.wl_1600 = self.water_parameters.wl_1600
+        self.wl_atmo = list(aerosol_config.fit_wavelengths_nm)
+        self.wl_non_neg = list(aerosol_config.nonnegative_reflectance_wavelengths_nm)
+        self.sunglint_threshold = product_config.sunglint_threshold
+        self.ndwi_threshold = product_config.ndwi_threshold
+        self.green_swir_index_threshold = product_config.green_swir_index_threshold
+        self.aerosol_parameters = AerosolParameters.from_cams(
+            cams_data=cams_data,
+            aerosol_lut=self.aero_lut,
+            config=aerosol_config,
+        )
+        if sensor_description is None:
+            sensor_description = SensorDescription.default(
+                self.raster,
+                name=self.scene_metadata.platform,
+            )
+        self.sensor_description = sensor_description
 
         self.fwhm = self.raster.fwhm.reset_coords(drop=True)  # .to_dataframe()
         self.wl = self.raster.wl
-        self.sza_mean = np.nanmean(self.raster.sza)
-        self.vza_mean = np.nanmean(self.raster.vza)
-        self.raa_mean = np.nanmean(self.raster.raa)
+        self.sza_mean = np.nanmean(self.scene_metadata.solar_zenith)
+        self.vza_mean = np.nanmean(self.scene_metadata.viewing_zenith)
+        self.raa_mean = np.nanmean(self.scene_metadata.relative_azimuth)
         self.get_air_mass()
 
         self.Tg_other = None
 
+        logger.info('Load pre-computed radiative transfer LUT')
+        # pre-computed auxiliary data
+
+        self.abs_gas_file = self.lut_tables.abs_gas_file
+        self.lut_file = self.lut_tables.lut_file
+        self.trans_lut_file = self.lut_tables.trans_lut_file
+
+        self.Twv_lut = self.lut_tables.interp_twv(
+            self.wl, self.sensor_description
+        )
+
         self.load_auxiliary_data()
 
+
+        logger.info(
+            "OPAC model: %s", self.aerosol_parameters.aerosol_model
+        )
+
         # spectral function for sensor response convolution
-        # exponent of the super-gaussian spectral response function
-        self.expon = expon
         # set the convolution module
+        # Keep the legacy Product.spectral attribute for notebooks
         self.spectral = Spectral(self.wl, self.fwhm.values)
 
+
     def load_auxiliary_data(self):
-
-        # ---------------------------------------
-        # Load pre-computed radiative transfer LUT
-        # ---------------------------------------
-        logger.info('Load pre-computed radiative transfer LUT')
-
-        # get LUT
-        self.gas_lut = xr.open_dataset(self.abs_gas_file)
-        self.aero_lut = xr.open_dataset(self.lut_file).isel(wind=1)
-        self.Ttot_Ed = xr.open_dataset(self.trans_lut_file).isel(wind=1)
-        self.Twv_lut = xr.open_dataset(self.water_vapor_transmittance_file).interp(wl=self.wl)
-
-        # convert wavelength in nanometer
-        self.aero_lut['wl'] = self.aero_lut['wl'] * 1000
-        self.aero_lut['wl'].attrs['description'] = 'wavelength of simulation (nanometer)'
-        self.Ttot_Ed['wl'] = self.Ttot_Ed['wl'] * 1e3
-        self.Ttot_Ed['wl'].attrs['description'] = 'wavelength of simulation (nanometer)'
-
         # get hgrs auxdata
         self.auxdata = AuxData(self.wl)
 
-    def get_ndwi(self):
-        r'''Normalized difference water index,
-        :math:`NDWI = (R_{G} - R_{NIR}) / (R_{G} + R_{NIR})`.'''
-        green = self.raster.Rtoa.sel(wl=self.wl_green).mean(dim='wl')
-        nir = self.raster.Rtoa.sel(wl=self.wl_nir).mean(dim='wl')
-        self.ndwi = (green - nir) / (green + nir)
-
-    def get_green_swir_index(self):
-        r'''Green-SWIR normalized index, :math:`(R_{G} - R_{1600}) / (R_{G} + R_{1600})`.'''
-        green = self.raster.Rtoa.sel(wl=self.wl_green).mean(dim='wl')
-        b1600 = self.raster.Rtoa.sel(wl=self.wl_1600).mean(dim='wl')
-        self.green_swir_index = (green - b1600) / (green + b1600)
-
-    def get_b2200(self):
-        '''Mean TOA reflectance over the sunglint bands (2150-2250 nm).'''
-        self.b2200 = self.raster.Rtoa.sel(wl=self.wl_sunglint).mean(dim='wl')
+    def return_dictionary(self):
+        """Return the Product values written to output metadata and variables."""
+        aerosol = self.aerosol_parameters
+        water = self.water_parameters
+        return {
+            "wl_water_vapor": water.wl_water_vapor,
+            "wl_sunglint": water.wl_sunglint,
+            "wl_atmo": list(aerosol.fit_wavelengths_nm),
+            "wl_to_remove": self.wl_to_remove,
+            "wl_non_neg": list(aerosol.nonnegative_reflectance_wavelengths_nm),
+            "wl_green": water.wl_green,
+            "wl_nir": water.wl_nir,
+            "wl_1600": water.wl_1600,
+            "wl_rgb": self.wl_rgb,
+            "dirdata": str(self.config.data_root),
+            "xcoarsen": self.xcoarsen,
+            "ycoarsen": self.ycoarsen,
+            "Npix_per_megapix": self.Npix_per_megapix,
+            "block_size": self.block_size,
+            "pixel_percentage": self.pixel_percentage,
+            "pixel_threshold": self.pixel_threshold,
+            "ang_resol": self.ang_resol,
+            "abs_gas_file": self.lut_tables.abs_gas_file,
+            "lut_file": self.lut_tables.lut_file,
+            "water_vapor_transmittance_file": self.lut_tables.water_vapor_transmittance_file,
+            "sunglint_threshold": water.mask.sunglint_threshold,
+            "ndwi_threshold": water.mask.ndwi_threshold,
+            "green_swir_index_threshold": water.mask.green_swir_index_threshold,
+            "pressure": self.pressure,
+            "to3c": self.to3c,
+            "tno2c": self.tno2c,
+            "tch4c": self.tch4c,
+            "psl": self.psl,
+            "altitude": self.altitude,
+            "coef_abs_scat": self.coef_abs_scat,
+            "water_vapor_smoothing_method": water.vapor.smoothing_method,
+            "aerosol_smoothing_method": aerosol.smoothing_method,
+            "aerosol_solver_max_iterations": aerosol.solver_max_iterations,
+            "aerosol_solver_ftol": aerosol.solver_ftol,
+            "aerosol_solver_warm_start": aerosol.solver_warm_start,
+            "bidirectional_transmittance_global": (
+                self.atmospheric_correction.bidirectional_transmittance_global
+            ),
+        }
 
     def apply_water_masks(self):
-        '''Set ``Rtoa`` to NaN outside the water pixels (see the class notes for the thresholds).'''
-        self.get_ndwi()
-        self.get_green_swir_index()
-        self.get_b2200()
-        self.raster['Rtoa'] = self.raster.Rtoa.where(self.ndwi > self.ndwi_threshold). \
-            where(self.b2200 < self.sunglint_threshold). \
-            where(self.green_swir_index > self.green_swir_index_threshold).load()
+        '''
+        Water mask ``water_mask`` from the spectral tests (NDWI, sunglint band level and green-SWIR index,
+        thresholds of the configuration), then set ``Rtoa`` to NaN outside the water pixels.
+        '''
+        green = self.raster.Rtoa.sel(wl=self.water_parameters.wl_green).mean(dim='wl')
+        nir = self.raster.Rtoa.sel(wl=self.water_parameters.wl_nir).mean(dim='wl')
+        ndwi = (green - nir) / (green + nir)
+
+        green = self.raster.Rtoa.sel(wl=self.water_parameters.wl_green).mean(dim='wl')
+        b1600 = self.raster.Rtoa.sel(wl=self.water_parameters.wl_1600).mean(dim='wl')
+        green_swir_index = (green - b1600) / (green + b1600)
+        b2200 = self.raster.Rtoa.sel(wl=self.water_parameters.wl_sunglint).mean(dim='wl')
+        water_mask = (
+            (ndwi > self.water_parameters.mask.ndwi_threshold)
+            & (b2200 < self.water_parameters.mask.sunglint_threshold)
+            & (green_swir_index > self.water_parameters.mask.green_swir_index_threshold)
+        )
+        self.raster['water_mask'] = water_mask.rename('water_mask')
+        self.raster['water_mask'].attrs.update(
+            long_name='spectral water mask',
+            description='True where the pixel passes all configured spectral water tests',
+        )
+        self.raster['Rtoa'] = self.raster.Rtoa.where(
+            water_mask
+        ).load()
+
+    def apply_land_mask(self):
+        """Mask PRISMA pixels classified as land; leave other sensors unchanged."""
+        product_config = self.atmospheric_correction.product
+        if not product_config.prisma_land_mask_enabled:
+            return
+        if self.scene_metadata.platform.upper() != "PRISMA":
+            return
+        if "landcover_mask" not in self.raster:
+            return
+
+        from scipy.ndimage import binary_dilation
+
+        classes = self.raster.landcover_mask.values
+        valid = np.isin(classes, product_config.prisma_land_valid_classes)
+        forbidden = np.isin(classes, product_config.prisma_land_forbidden_classes)
+        # Preserve unlabeled pixels away from known land, as in the sibling path.
+        unlabeled_water = (classes == 255) & ~binary_dilation(forbidden)
+        land_mask = valid | unlabeled_water
+        self.raster["Rtoa"] = self.raster.Rtoa.where(land_mask)
+        self.land_mask = xr.DataArray(
+            land_mask,
+            dims=("y", "x"),
+            coords={"y": self.raster.y, "x": self.raster.x},
+            name="land_mask",
+            attrs={"description": "PRISMA land-cover water mask"},
+        )
 
     def get_omnicloudmask(self,
                           rgnir):
@@ -520,55 +625,6 @@ class Product():
         wl_final = xarr_.wl.values
         return xds.sel(wl=wl_final)
 
-    @staticmethod
-    def Gamma2sigma(Gamma):
-        '''Function to convert FWHM (Gamma) to standard deviation (sigma), see :py:func:`Gamma2sigma`'''
-        return Gamma * np.sqrt(2.) / (np.sqrt(2. * np.log(2.)) * 2.)
-
-    @staticmethod
-    def gaussian(x, mu, sigma):
-        '''Normalized Gaussian distribution, see :py:func:`gaussian`'''
-        return 1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(-(x - mu) ** 2 / (2 * sigma ** 2))
-
-    @staticmethod
-    @njit(fastmath=True)
-    def super_gaussian(x,
-                       amplitude=1.0,
-                       mu=0.0,
-                       sigma=1.0,
-                       expon=10.0):
-        '''
-        Super-Gaussian distribution, see :py:func:`super_gaussian`
-        '''
-
-        sigma = max(1.e-15, sigma)
-        return amplitude / (np.sqrt(2 * np.pi) * sigma) * \
-            np.exp(-np.abs(x - mu) ** expon / (2 * sigma ** expon))
-
-    @staticmethod
-    @njit(fastmath=True)
-    def super_gaussian_fwhm2sigma(fwhm,
-                                  expon):
-        '''
-        Function to convert FWHM to standard deviation (sigma) of the super-gaussian distribution,
-        see :py:func:`super_gaussian_fwhm2sigma`
-        '''
-        return fwhm / 2 * (2 * np.log(2)) ** (-1 / expon)
-
-    def plot_rsr(self):
-
-        wl_ref = np.linspace(360, 2550, 10000)
-        fig, axs = plt.subplots(nrows=1, ncols=1, figsize=(10, 4))
-
-        for mu, fwhm in self.fwhm.iterrows():
-            sig = self.Gamma2sigma(fwhm.values)
-            rsr = self.gaussian(wl_ref, mu, sig)
-            axs.plot(wl_ref, rsr, '-k', lw=0.5, alpha=0.4)
-        axs.set_xlabel('Wavelength (nm)')
-        axs.set_ylabel('Spectral response function')
-
-        return fig
-
     def plot_angles(self, raster_name='raster',
                     figsize=(20, 4),
                     cmap=plt.cm.Spectral_r, **kwargs):
@@ -664,8 +720,29 @@ class Algo(Product):
        prod.other_gas_correction()          # coarse_masked_raster.Rtoa / Tg_other
     '''
 
-    def __init__(self, l1c_obj=None, xcoarsen=20, ycoarsen=20, expon=2):
-        Product.__init__(self, l1c_obj, xcoarsen, ycoarsen, expon)
+    def __init__(
+        self,
+        l1c_obj,
+        cams_data: xr.Dataset,
+        xcoarsen: int = None,
+        ycoarsen: int = None,
+        expon=2,
+        *,
+        app_config: AppConfig = None,
+        scene_metadata: SceneMetadata = None,
+        sensor_description: SensorDescription = None,
+    ):
+        Product.__init__(
+            self,
+            l1c_obj,
+            cams_data,
+            xcoarsen,
+            ycoarsen,
+            expon,
+            app_config=app_config,
+            scene_metadata=scene_metadata,
+            sensor_description=sensor_description,
+        )
 
     def get_pressure(self, alt, psl):
         r'''Compute the pressure for a given altitude (barometric formula)
@@ -706,15 +783,14 @@ class Algo(Product):
            \tau_g(\lambda) = c_{O_3}\tau^*_{O_3} + c_{CH_4}\tau^*_{CH_4} + c_{NO_2}\tau^*_{NO_2}
            + \frac{P}{1000}\left[\tau^*_{CO} + \kappa\left(\tau^*_{CO_2} + \tau^*_{O_2} + \tau^*_{O_4}\right)\right]
 
-        where :math:`\tau^*` are the normalized optical thicknesses of the LUT ``abs_gas_file``,
+        where :math:`\tau^*` are the normalized optical thicknesses of the gas LUT (``abs_gas_file``),
         :math:`c` the columns ``to3c``, ``tch4c``, ``tno2c``, :math:`P` the pressure (hPa) and
         :math:`\kappa` = ``coef_abs_scat``. Result in ``abs_gas_opt_thick``.
 
         The normalized optical thicknesses were computed with the REPTRAN parameterization
         (Gasteiger et al., 2014) at fine spectral resolution.
         '''
-        gas_lut = self.gas_lut
-
+        gas_lut = self.lut_tables.gas_lut
         ot_o3 = gas_lut.o3 * self.to3c
         ot_ch4 = gas_lut.ch4 * self.tch4c
         ot_no2 = gas_lut.no2 * self.tno2c
@@ -735,12 +811,9 @@ class Algo(Product):
         '''
 
         self.get_gaseous_optical_thickness()
-        wl_ref = self.gas_lut.wl  # .values
         Tg = np.exp(- self.air_mass_mean * self.abs_gas_opt_thick)
 
-        # TODO check which one better
-        # self.Tg_other = self.spectral.convolve2(Tg,name='Ttot',expon=self.expon)
-        self.Tg_other = self.spectral.convolve(Tg, name='Ttot')
+        self.Tg_other = self.sensor_description.convolve(Tg).rename({"wl_sensor": "wl"})
 
         # fwhms = self.raster.fwhm.reset_coords(drop=True).to_dataframe()
         # Tg_int = []
@@ -796,17 +869,25 @@ class Algo(Product):
     def get_wv_transmittance_raster(self, tcwv_raster):
         r'''
         Raster of the water vapor transmittance :math:`T_{wv}(\lambda; W, \bar M)` from the retrieved
-        water vapor ``tcwv`` (rounded to 0.1 kg m-2) and the LUT ``water_vapor_transmittance_file``.
-        Result in ``Twv_raster``.
+        water vapor (``tcwv_smooth`` if present, else ``tcwv``, rounded to 0.1 kg m-2) and the water vapor
+        transmittance LUT. Result in ``Twv_raster``.
 
         :param tcwv_raster: xarray.Dataset with ``tcwv`` (see :py:class:`WaterVapor`)
         '''
-        tcwv_vals = tcwv_raster.tcwv.round(1)
+        tcwv_source = tcwv_raster.get("tcwv_smooth", tcwv_raster.tcwv)
+        tcwv_vals = tcwv_source.round(1)
         tcwvs = np.unique(tcwv_vals)
         tcwvs = tcwvs[~np.isnan(tcwvs)]
         # TODO improve for air_mass raster
         Twvs = self.Twv_lut.Twv.interp(air_mass=self.air_mass_mean).interp(tcwv=tcwvs, method='linear').drop('air_mass')
         self.Twv_raster = Twvs.interp(tcwv=tcwv_vals, method='nearest')
+        if not behavior.PREVIOUS_BEHAVIOR:
+            self.Twv_raster = self.Twv_raster.where(tcwv_vals.notnull())
+        # The lookup target is an auxiliary coordinate, not a second TCWV
+        # product variable. Keep it from propagating onto Rtoa/Rrs, where it
+        # conflicts with the retrieved coarse-grid ``tcwv`` output variable.
+        if 'tcwv' in self.Twv_raster.coords:
+            self.Twv_raster = self.Twv_raster.drop_vars('tcwv')
 
     def get_full_resolution(self, xarr):
         '''Interpolate ``xarr`` (coarse raster) onto the full resolution grid.'''
@@ -843,6 +924,30 @@ class Solver():
         array([0.14142136, 0.07071068])
         '''
         return np.sqrt(np.diag(hess_inv * resVariance))
+
+    @staticmethod
+    def fill_na_conv(values):
+        """Keep a valid center cell; replace a NaN center by its neighbors' mean."""
+        center = len(values) // 2
+        if not np.isnan(values[center]):
+            return values[center]
+        neighbors = np.delete(values, center)
+        if np.isnan(neighbors).all():
+            return np.nan
+        return np.nanmean(neighbors)
+
+    def fill_nodata_local(self, values, footprint):
+        """Fill only NaN cells from a local nan-mean neighborhood."""
+        values = np.asarray(values, dtype=float)
+        if not np.isnan(values).any():
+            return values.copy()
+        return ndimage.generic_filter(
+            values,
+            function=self.fill_na_conv,
+            footprint=np.ones(footprint, dtype=bool),
+            mode="constant",
+            cval=np.nan,
+        )
 
     @staticmethod
     def conv_mapping(x):
@@ -977,7 +1082,8 @@ class WaterVapor(Solver):
         self.raster = prod.__dict__[raster_name]
         self.air_mass = prod.air_mass_mean
         # get data for the subset of "water vapor" wavelengths
-        data = self.raster[variable].sel(wl=prod.wl_water_vapor)
+        self.parameters = prod.water_parameters.vapor
+        data = self.raster[variable].sel(wl=prod.water_parameters.wl_water_vapor)
         self.data = data
         self.nwl, self.height, self.width = data.shape
         self.x = data.x
@@ -986,7 +1092,9 @@ class WaterVapor(Solver):
 
         # TODO improve to process the air mass raster instead of scalar mean value
         # TODO check impact of method = 'nearest'
-        self.Twv_ = prod.Twv_lut.Twv.interp(wl=self.data.wl).interp(air_mass=self.air_mass)
+        self.Twv_ = prod.lut_tables.interp_twv(
+            self.data.wl, prod.sensor_description
+        ).Twv.interp(air_mass=self.air_mass)
         self.Twv_['wl'] = self.Twv_['wl'] / 1000
         self.wl_mic = self.Twv_.wl.values
 
@@ -1007,13 +1115,15 @@ class WaterVapor(Solver):
     def func2(self, x, Twv, wl, y):
         return self.toa_simu2(wl, Twv, *x) - y
 
-    def solve(self, x0=[2, -0.04, 0.1]):
-        '''
+    def solve(self, x0=None):
+        r'''
         Run the fit on every mega-pixel with enough water pixels (parallel processing of blocks of
         ``block_size`` mega-pixels). Result in ``water_vapor`` (``tcwv``, ``tcwv_std``).
 
-        :param x0: first guess of :math:`(W, a, b)`
+        :param x0: first guess of :math:`(W, a, b)`; default: ``first_guess`` of the configuration
         '''
+        if x0 is None:
+            x0 = self.parameters.first_guess
 
         result = np.ctypeslib.as_ctypes(np.full((self.width, self.height, 6), np.nan))
         shared_array = sharedctypes.RawArray(result._type_, result)
@@ -1077,6 +1187,57 @@ class WaterVapor(Solver):
                                           units="kg/m**2")
                                       )
 
+        if not behavior.PREVIOUS_BEHAVIOR:
+            valid_tcwv = self.water_vapor.tcwv.notnull()
+            self.water_vapor["water_vapor_validity_mask"] = valid_tcwv.astype(
+                np.uint8
+            )
+            self.water_vapor["water_vapor_validity_mask"].attrs.update(
+                long_name="water vapor retrieval validity mask",
+                description=(
+                    "1 where a finite TCWV retrieval was available before spatial "
+                    "interpolation; 0 where the retrieval was missing"
+                ),
+                flag_values=np.array([0, 1], dtype=np.uint8),
+                flag_meanings="invalid valid",
+            )
+
+        settings = self.parameters
+        if settings.smoothing_method != "none":
+            values = self.water_vapor.tcwv.values.astype(float)
+            if settings.smoothing_method == "weighted_local":
+                std = self.water_vapor.tcwv_std.values.astype(float)
+                values = self.filter2d(
+                    values, 1.0 / std**2, settings.smoothing_window
+                )
+            elif settings.smoothing_method != "nanmean_local":
+                raise ValueError(
+                    f"Unknown water-vapor smoothing method: {settings.smoothing_method}"
+                )
+            values = ndimage.generic_filter(
+                values,
+                function=self.conv_mapping,
+                footprint=np.ones(settings.smoothing_window, dtype=bool),
+                mode="nearest",
+            )
+            self.water_vapor["tcwv_smooth"] = (("y", "x"), values)
+
+        if not behavior.PREVIOUS_BEHAVIOR:
+            self.water_vapor["tcwv"] = (
+                ("y", "x"),
+                self.fill_nodata_local(
+                    self.water_vapor.tcwv.values, settings.smoothing_window
+                ),
+            )
+            if "tcwv_smooth" in self.water_vapor:
+                self.water_vapor["tcwv_smooth"] = (
+                    ("y", "x"),
+                    self.fill_nodata_local(
+                        self.water_vapor.tcwv_smooth.values,
+                        settings.smoothing_window,
+                    ),
+                )
+
 
 class Aerosol(Solver):
     r'''
@@ -1110,22 +1271,22 @@ class Aerosol(Solver):
     '''
 
     def __init__(self, prod,
-                 aerosol_model='COAV_rh70',
-                 first_guess=[0.01, 0],
-                 aot550_limits=[0.002, 0.8],
                  raster_name='coarse_masked_raster',
                  variable='Rtoa'):
 
         self.prod = prod
-        self.aerosol_model = aerosol_model
+        self.sensor_description = prod.sensor_description
+        aerosol_state = prod.aerosol_parameters
+        self.aerosol_state = aerosol_state
+        self.aerosol_model = aerosol_state.aerosol_model
         self.raster = prod.__dict__[raster_name]
         self.auxdata = prod.auxdata
         self.aero_lut = prod.aero_lut
 
         # set box limits in aod550 for non-linear optimization
-        self.aod550_min = aot550_limits[0]
-        self.aod550_max = aot550_limits[1]
-        self.first_guess = first_guess
+        self.aod550_min = aerosol_state.aod550_min
+        self.aod550_max = aerosol_state.aod550_max
+        self.first_guess = [aerosol_state.aod550_initial, 0.]
 
         # get full resolution parameters
         self.xfull = prod.raster.x
@@ -1134,8 +1295,8 @@ class Aerosol(Solver):
         # get data for the subset of "black water" wavelengths
         self.data = self.raster[variable]
         data = self.data
-        self.wl_atmo = prod.wl_atmo
-        self.wl_non_neg = prod.wl_non_neg
+        self.wl_atmo = list(aerosol_state.fit_wavelengths_nm)
+        self.wl_non_neg = list(aerosol_state.nonnegative_reflectance_wavelengths_nm)
         self.nwl, self.height, self.width = data.shape
         self.x = data.x
         self.y = data.y
@@ -1151,8 +1312,7 @@ class Aerosol(Solver):
         # process parameters
         self.block_size = self.prod.block_size
         self.pixel_threshold = self.prod.pixel_threshold
-        self.wl_sunglint = self.prod.wl_sunglint
-
+        self.wl_sunglint = self.prod.water_parameters.wl_sunglint
         self.prepare_lut(self.wl)
 
     def prepare_lut(self, wl):
@@ -1177,15 +1337,24 @@ class Aerosol(Solver):
         self.rot = auxdata.rot.interp(wl=wl) * self.pressure / self.auxdata.pressure_rot_ref
 
         aot_refs = [0, *np.logspace(-3, np.log10(0.8), 100)]
-        self.aot_lut = self.aero_lut.sel(model=self.aerosol_model).aot.interp(wl=wl, method='quadratic').interp(
-            aot_ref=aot_refs,
-            method='quadratic').dropna('aot_ref')  # sel(wl=wl_glint)
+        self.aot_lut = (
+            self.aero_lut
+            .sel(model=self.aerosol_model)
+            .aot.interp(wl=wl,method="quadratic")
+            .interp(aot_ref=aot_refs, method='quadratic').dropna('aot_ref')
+        )
 
-        norm_radiance = self.aero_lut.sel(model=self.aerosol_model
-                                          ).I.interp(vza=vza, azi=raa_lut, method='linear'
-                                                     ).interp(sza=sza, method='quadratic').squeeze()
-        self.Rtoa_lut = norm_radiance.interp(wl=wl, method='quadratic') \
-                            .interp(aot_ref=aot_refs, method='quadratic').dropna('aot_ref') / np.cos(np.radians(sza))
+        norm_radiance = (
+            self.aero_lut
+            .sel(model=self.aerosol_model).I
+            .interp(vza=vza, azi=raa_lut, method='linear')
+            .interp(sza=sza, method='quadratic').squeeze()
+        )
+        self.Rtoa_lut = (
+            norm_radiance.interp(wl=wl, method="quadratic")
+            .interp(aot_ref=aot_refs, method='quadratic')
+            .dropna('aot_ref') / np.cos(np.radians(sza))
+        )
 
     def transmittance_dir(self, aot, M, rot=0):
         r'''Direct transmittance :math:`T_{dir} = \exp\left[-(\tau_R + \tau_a) M\right]`'''
@@ -1279,6 +1448,12 @@ class Aerosol(Solver):
                             continue
                     # x0 = self.x0
                     yfull = data.isel(x=ix, y=iy).dropna(dim='wl')
+                    # Pixels can pass the coarse water-count threshold while
+                    # still having no valid spectrum after masking. xarray's
+                    # nearest selection raises on an empty wavelength index;
+                    # leave this pixel's preinitialized retrieval values NaN.
+                    if yfull.sizes['wl'] == 0:
+                        continue
                     # sigma = Rtoa_std.isel(x=ix,y=iy).dropna(dim='wl')
 
                     cons = ({'type': 'ineq',
@@ -1292,10 +1467,10 @@ class Aerosol(Solver):
                                              yfull.sel(wl=self.wl_atmo, method='nearest')),
                                        method='SLSQP',
                                        bounds=((self.aod550_min, self.aod550_max), (0, 1.3)),
-                                       constraints=cons, options={'maxiter': 10}
+                                       constraints=cons, options=self._optimizer_options()
                                        )
                     xres = min_res.x
-                    if min_res.success:
+                    if min_res.success and self.aerosol_state.solver_warm_start:
                         x0 = xres
                     # except:
                     # print(wl_,aot_,rot_,Rtoa_lut_,sunglint_eps_, y)
@@ -1312,46 +1487,103 @@ class Aerosol(Solver):
         res = p.map(chunk_process, window_idxs)
         result = np.ctypeslib.as_array(shared_array)
 
-        self.aero_img = xr.Dataset(dict(aot_ref=(["y", "x"], result[:, :, 0].T),
-                                        brdfg=(["y", "x"], result[:, :, 1].T),
-                                        aot_ref_std=(["y", "x"], result[:, :, 2].T),
-                                        brdfg_std=(["y", "x"], result[:, :, 3].T)
-                                        ),
-                                   coords=dict(
-                                       x=self.x,
-                                       y=self.y),
-                                   attrs=dict(
-                                       description="aerosol and sunglint retrieval from coarse resolution data",
-                                       aerosol_model=self.aerosol_model)
-                                   )
+        self.aero_img = xr.Dataset(
+            dict(
+                aot_ref=(["y", "x"], result[:, :, 0].T),
+                brdfg=(["y", "x"], result[:, :, 1].T),
+                aot_ref_std=(["y", "x"], result[:, :, 2].T),
+                brdfg_std=(["y", "x"], result[:, :, 3].T)
+            ),
+            coords=dict(
+                x=self.x,
+                y=self.y),
+            attrs=dict(
+                description="aerosol and sunglint retrieval from coarse resolution data",
+                aerosol_model=self.aerosol_model
+                )
+        )
+        if not behavior.PREVIOUS_BEHAVIOR:
+            valid_aot_retrieval = self.aero_img.aot_ref.notnull()
+            self.aero_img['aerosol_retrieval_validity_mask'] = (
+                valid_aot_retrieval.astype(np.uint8)
+            )
+            self.aero_img['aerosol_retrieval_validity_mask'].attrs.update(
+                long_name='aerosol retrieval validity mask',
+                description=(
+                    '1 where a finite AOT retrieval was available before spatial '
+                    'interpolation; 0 where the retrieval was missing'
+                ),
+                flag_values=np.array([0, 1], dtype=np.uint8),
+                flag_meanings='invalid valid',
+            )
+            if water_pixel_number is not None:
+                self.aero_img['water_validity_mask'] = (
+                    water_pixel_number >= self.pixel_threshold
+                ).astype(np.uint8)
+                self.aero_img['water_validity_mask'].attrs.update(
+                    long_name='water pixel threshold validity mask',
+                    description=(
+                        '1 where water_pixel_number meets the aerosol retrieval '
+                        'pixel threshold; 0 otherwise'
+                    ),
+                    flag_values=np.array([0, 1], dtype=np.uint8),
+                    flag_meanings='invalid valid',
+                )
 
-    def smoothing(self,
-                  weights,
-                  windows=np.array([1, 1]),
-                  mask=np.ones((3, 3))
-                  ):
+            self.aero_img['aerosol_validity_mask'] = (
+                data.notnull().any(dim='wl').astype(np.uint8)
+            )
+            self.aero_img['aerosol_validity_mask'].attrs.update(
+                long_name='aerosol retrieval input validity mask',
+                description=(
+                    '1 where at least one aerosol retrieval wavelength is finite '
+                    'after masking and gas-transmittance filtering; 0 otherwise. '
+                    'This indicates input-spectrum availability, not optimizer success.'
+                ),
+                flag_values=np.array([0, 1], dtype=np.uint8),
+                flag_meanings='invalid valid',
+            )
+
+    def _optimizer_options(self):
+        options = {"maxiter": self.aerosol_state.solver_max_iterations}
+        if self.aerosol_state.solver_ftol is not None:
+            options["ftol"] = self.aerosol_state.solver_ftol
+        return options
+
+    def smoothing(self, weights, windows=None, mask=None):
         '''
-        Smooth and gap-fill the retrieved ``aot_ref``: weighted moving average (:py:meth:`Solver.filter2d`)
-        followed by a NaN-mean filter over the footprint ``mask`` (:py:meth:`Solver.conv_mapping`, computed
-        with box filters when ``mask`` is rectangular).
+        Smooth and gap-fill the retrieved ``aot_ref``, with the ``smoothing_method`` of the configuration:
+
+        - ``none``: no smoothing,
+        - ``weighted_local``: weighted moving average (:py:meth:`Solver.filter2d`) followed by a NaN-mean
+          filter over the footprint (:py:meth:`Solver.conv_mapping`, computed with box filters),
+        - ``nanmean_local``: NaN-mean filter over the footprint only.
+
         Result in ``aero_img['aot_ref_smoothed']``.
 
         :param weights: weight image (e.g., number of water pixels per mega-pixel); mega-pixels without a
             retrieved ``aot_ref`` (NaN) get a null weight
-        :param windows: window of the weighted average, in mega-pixels (rows, columns)
-        :param mask: footprint of the NaN-mean filter
+        :param windows: window of the weighted average, in mega-pixels (rows, columns); default:
+            ``smoothing_window`` of the configuration
+        :param mask: shape (rows, columns) of the footprint of the NaN-mean filter; default:
+            ``smoothing_footprint`` of the configuration
         '''
-
-        #weights = (1 / self.aero_img['aot_ref_std'] ** 2).__deepcopy__().to_numpy().astype(float)
+        method = self.aerosol_state.smoothing_method
         param = self.aero_img['aot_ref'].to_numpy().astype(float)
-        # a failed retrieval must not spread NaN into the weighted mean of its neighbours
-        weights = np.where(np.isnan(param), 0., weights)
-        aot_ref_smoothed = self.filter2d(param, weights, windows)
-        if np.all(mask == 1):
-            res = self._nanmean_box(aot_ref_smoothed, mask.shape)
+        if method == "none":
+            res = param
+        elif method == "weighted_local":
+            windows = self.aerosol_state.smoothing_window if windows is None else windows
+            footprint = self.aerosol_state.smoothing_footprint if mask is None else mask
+            # a failed retrieval must not spread NaN into the weighted mean of its neighbours
+            weights = np.where(np.isnan(param), 0., weights)
+            aot_ref_smoothed = self.filter2d(param, weights, np.asarray(windows))
+            res = self._nanmean_box(aot_ref_smoothed, tuple(footprint))
+        elif method == "nanmean_local":
+            footprint = self.aerosol_state.smoothing_footprint if mask is None else mask
+            res = self._nanmean_box(param, tuple(footprint))
         else:
-            res = ndimage.generic_filter(aot_ref_smoothed, function=self.conv_mapping, footprint=mask,
-                                         mode='nearest')
+            raise ValueError(f"Unknown aerosol smoothing method: {method}")
 
         self.aero_img['aot_ref_smoothed'] = xr.DataArray(res, coords=dict(y=self.aero_img.y, x=self.aero_img.x))
 
@@ -1364,14 +1596,15 @@ class Aerosol(Solver):
 
     def get_atmo_parameters(self,
                             prod,
-                            windows=np.array([1, 1])):
+                            windows=None):
         r'''
         Rasters of the atmospheric parameters for the smoothed :math:`\tau_{ref}` (rounded to 0.001):
         spectral AOT ``aot``, diffuse reflectance ``Rtoa_diff`` and direct transmittance ``Tdir``.
         Result in ``atmo_img``.
 
         :param prod: :py:class:`Algo` object
-        :param windows: window of the weighted average of :py:meth:`smoothing`, in mega-pixels
+        :param windows: window of the weighted average of :py:meth:`smoothing`, in mega-pixels; default:
+            ``smoothing_window`` of the configuration
         '''
 
         wl = prod.coarse_masked_raster.wl
@@ -1380,33 +1613,62 @@ class Aerosol(Solver):
         # get LUT for desired wavelengths
         self.prepare_lut(wl)
         self.smoothing(weights, windows=windows)
+        if not behavior.PREVIOUS_BEHAVIOR:
+            self.aero_img['aot_ref'] = (
+                ('y', 'x'),
+                self.fill_nodata_local(
+                    self.aero_img.aot_ref.values,
+                    self.aerosol_state.smoothing_footprint,
+                ),
+            )
+            self.aero_img['aot_ref_smoothed'] = (
+                ('y', 'x'),
+                self.fill_nodata_local(
+                    self.aero_img.aot_ref_smoothed.values,
+                    self.aerosol_state.smoothing_footprint,
+                ),
+            )
         self.get_aot_full_resolution()
 
         # construct aot raster
-        aot_ref_median = self.aero_img.aot_ref_smoothed.median()
-        aot_ref_vals = self.aero_img['aot_ref_smoothed'].fillna(aot_ref_median).round(3)
+        aot_ref_source = self.aero_img['aot_ref_smoothed']
+        if behavior.PREVIOUS_BEHAVIOR:
+            aot_ref_median = aot_ref_source.median()
+            aot_ref_vals = aot_ref_source.fillna(aot_ref_median).round(3)
+        else:
+            aot_ref_vals = aot_ref_source.round(3)
+        valid_aot = aot_ref_vals.notnull()
         aot_refs = np.unique(aot_ref_vals)
         aot_refs = aot_refs[~np.isnan(aot_refs)]
         # TODO update LUT for aot< 0.001
         aot_refs[aot_refs < 0.002] = 0.002
 
-        # if rounded aot_ref has unique value
-        if len(aot_refs) == 1:
-            aot_refs = np.concatenate([aot_refs, 1.2 * aot_refs])
-        aots = self.aot_lut.interp(aot_ref=aot_refs, method='linear')
-        aots = aots.interp(aot_ref=aot_ref_vals, method='nearest')
+        if len(aot_refs) == 0:
+            aots = self.aot_lut.isel(aot_ref=0, drop=True) + aot_ref_vals
+            Rdiffs = self.Rtoa_lut.isel(aot_ref=0, drop=True) + aot_ref_vals
+        else:
+            # if rounded aot_ref has unique value
+            if len(aot_refs) == 1:
+                aot_refs = np.concatenate([aot_refs, 1.2 * aot_refs])
+            aots = self.aot_lut.interp(aot_ref=aot_refs, method='linear')
+            aots = aots.interp(aot_ref=aot_ref_vals, method='nearest')
+            Rdiffs = self.Rtoa_lut.interp(aot_ref=aot_refs, method='linear')
+            Rdiffs = Rdiffs.interp(aot_ref=aot_ref_vals, method='nearest')
+            if not behavior.PREVIOUS_BEHAVIOR:
+                aots = aots.where(valid_aot)
+                Rdiffs = Rdiffs.where(valid_aot)
 
         aots.name = 'aot'
         aots.attrs['description'] = 'spectral aerosol optical thickness'
 
         # construct raster for diffuse atmospheric reflectance
-        Rdiffs = self.Rtoa_lut.interp(aot_ref=aot_refs, method='linear')
-        Rdiffs = Rdiffs.interp(aot_ref=aot_ref_vals, method='nearest')
         Rdiffs.name = 'Rtoa_diff'
         Rdiffs.attrs['description'] = 'top-of-atmosphere atmosphere reflectance'
 
         # construct raster for direct transmittance due to rayleigh and aerosol
         Tdirs = self.transmittance_dir(aots, self.air_mass, rot=self.rot)
+        if not behavior.PREVIOUS_BEHAVIOR:
+            Tdirs = Tdirs.where(valid_aot)
         Tdirs.name = 'Tdir'
         Tdirs.attrs['description'] = 'direct transmittance due to rayleigh and aerosol for total air mass'
 
@@ -1416,318 +1678,12 @@ class Aerosol(Solver):
         self.atmo_img.attrs['aerosol_model'] = self.aerosol_model
 
 
-@njit(fastmath=True)
-def Gamma2sigma(Gamma):
-    r'''Function to convert FWHM (Gamma) to standard deviation (sigma)
 
-    .. math::
-
-       \sigma = \frac{\sqrt{2}\, \Gamma}{2 \sqrt{2 \ln 2}} = \frac{\Gamma}{2\sqrt{\ln 2}}
-
-    .. note::
-
-       This is :math:`\sqrt{2}` times the standard deviation of a Gaussian of full width at half maximum
-       :math:`\Gamma`, :math:`\Gamma / (2\sqrt{2\ln 2})` (see :py:func:`super_gaussian_fwhm2sigma`
-       with ``expon=2``).
-
-    Examples
-    --------
-    >>> from hgrs.hgrs_kernel import Gamma2sigma
-    >>> round(Gamma2sigma(10.), 4)
-    6.0056
-    '''
-    return Gamma * np.sqrt(2.) / (np.sqrt(2. * np.log(2.)) * 2.)
-
-
-@njit(fastmath=True)
-def gaussian(x, mu, sigma):
-    r'''Normalized Gaussian distribution
-
-    .. math::
-
-       g(x) = \frac{1}{\sigma\sqrt{2\pi}} \exp\left(-\frac{(x - \mu)^2}{2\sigma^2}\right)
-
-    Examples
-    --------
-    >>> from hgrs.hgrs_kernel import gaussian
-    >>> round(gaussian(0., 0., 1.), 4)
-    0.3989
-    '''
-    return 1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(-(x - mu) ** 2 / (2 * sigma ** 2))
-
-
-@njit(fastmath=True)
-def super_gaussian(x,
-                   amplitude=1.0,
-                   mu=0.0,
-                   sigma=1.0,
-                   expon=10.0):
-    r'''
-    Super-Gaussian distribution
-
-    .. math::
-
-       g(x) = \frac{A}{\sigma\sqrt{2\pi}} \exp\left(-\frac{|x - \mu|^p}{2\sigma^p}\right)
-
-    :param x: abscissa (e.g., wavelength)
-    :param amplitude: :math:`A`
-    :param mu: center :math:`\mu`
-    :param sigma: width :math:`\sigma`
-    :param expon: exponent :math:`p` (:math:`p = 2` for a Gaussian)
-    :return: :math:`g(x)`
-
-    Examples
-    --------
-    At a distance FWHM/2 of the center, the distribution is half of its maximum:
-
-    >>> from hgrs.hgrs_kernel import super_gaussian, super_gaussian_fwhm2sigma
-    >>> sigma = super_gaussian_fwhm2sigma(10., 6.)
-    >>> round(super_gaussian(5., 1., 0., sigma, 6.) / super_gaussian(0., 1., 0., sigma, 6.), 4)
-    0.5
-    '''
-
-    sigma = max(1.e-15, sigma)
-    return amplitude / (np.sqrt(2 * np.pi) * sigma) * \
-        np.exp(-np.abs(x - mu) ** expon / (2 * sigma ** expon))
-
-
-@njit(fastmath=True)
-def super_gaussian_fwhm2sigma(fwhm,
-                              expon):
-    r'''
-    Function to convert FWHM to standard deviation (sigma) of the super-gaussian distribution
-
-    .. math::
-
-       \sigma = \frac{\Gamma}{2} \left(2 \ln 2\right)^{-1/p}
-
-    :param fwhm: full width at half maximum :math:`\Gamma`
-    :param expon: exponent :math:`p` of the super-Gaussian
-    :return: :math:`\sigma`
-
-    Examples
-    --------
-    >>> from hgrs.hgrs_kernel import super_gaussian_fwhm2sigma
-    >>> round(super_gaussian_fwhm2sigma(10., 2.), 4)   # Gaussian: FWHM / (2 sqrt(2 ln 2))
-    4.2466
-    >>> round(super_gaussian_fwhm2sigma(10., 6.), 4)
-    4.7351
-    '''
-    return fwhm / 2 * (2 * np.log(2)) ** (-1 / expon)
-
-
-class Spectral():
-    r'''
-    Convolution of spectral signals with the spectral response functions (SRF) of the sensor bands
-
-    .. math::
-
-       X_i = \frac{\int X(\lambda)\, S_i(\lambda)\, d\lambda}{\int S_i(\lambda)\, d\lambda}
-
-    where :math:`S_i` is a Gaussian (:py:meth:`convolve`) or a super-Gaussian (:py:meth:`convolve2`)
-    centered on :math:`\lambda_i` with the full width at half maximum of the band.
-
-    :param central_wl: numpy array of the central wavelengths
-    :param fwhm: scalar or numpy array containing full width at half maximum in nm
-
-    Examples
-    --------
-    A signal varying linearly with wavelength is not changed by symmetric response functions:
-
-    >>> import numpy as np
-    >>> import xarray as xr
-    >>> from hgrs.hgrs_kernel import Spectral
-    >>> wl = np.arange(400, 801, 1.)
-    >>> signal = xr.DataArray((wl - 400) / 400, coords={'wl': wl})
-    >>> spectral = Spectral(np.array([500., 600., 700.]), fwhm=10.)
-    >>> spectral.convolve(signal).values.round(4)
-    array([0.25, 0.5 , 0.75], dtype=float32)
-    >>> spectral.convolve2(signal, expon=6).values.round(4)
-    array([0.25, 0.5 , 0.75], dtype=float32)
-    '''
-
-    def __init__(self,
-                 central_wl,
-                 fwhm):
-        self.central_wl = central_wl
-        if not isinstance(fwhm, np.ndarray):
-            fwhm = np.array([fwhm] * len(central_wl))
-        fwhm = xr.DataArray(fwhm, name='fwhm',
-                            coords={'wl': central_wl},
-                            attrs={
-                                'definition': 'full width at half maximum of spectral responses modeled as gaussian distributions'})
-        self.fwhm = fwhm
-
-    def plot_rsr(self):
-
-        wl_ref = np.linspace(360, 2550, 10000)
-        fig, axs = plt.subplots(nrows=1, ncols=1, figsize=(10, 4))
-
-        for mu, fwhm in self.fwhm.groupby('wl'):
-            sig = self.Gamma2sigma(fwhm.values)
-            rsr = self.gaussian(wl_ref, mu, sig)
-            axs.plot(wl_ref, rsr, '-k', lw=0.5, alpha=0.4)
-        axs.set_xlabel('Wavelength (nm)')
-        axs.set_ylabel('Spectral response function')
-
-        return fig
-
-    @staticmethod
-    @njit(parallel=True)
-    def convolve_(
-            wl_signal,
-            signal,
-            wl,
-            fwhm,
-    ):
-        '''
-        Convolution assuming Dirac for signal source spectral response
-
-        :paral wl_signal: wavelength array of spectral signal
-        :param signal: numpy of signal to convolve, coord=wl_signal
-        :param wl: numpy of wavelength coordinates of signal
-        :param fwhm: numpy with data=fwhm containing full width at half maximum in nm
-        :return: numpy of convoluted signal
-        '''
-        Nwl = len(wl)
-        signal_ = np.full((Nwl), np.nan, dtype=np.float32)
-        for ii in prange(len(fwhm)):
-            sig = Gamma2sigma(fwhm[ii])
-            rsr = gaussian(wl_signal, wl[ii], sig)
-            signal_[ii] = np.trapezoid((signal * rsr), wl_signal) / np.trapezoid(rsr, wl_signal)
-        return signal_
-
-    @staticmethod
-    @njit(parallel=True)
-    def convolve2_(
-            wl_signal,
-            signal,
-            wl,
-            fwhm,
-            expon=2.,
-            threshold=1e-6
-    ):
-        '''
-        Convolution assuming Dirac for signal source spectral response
-
-        :paral wl_signal: wavelength array of spectral signal
-        :param signal: numpy of signal to convolve, coord=wl_signal
-        :param wl: numpy of wavelength coordinates of signal
-        :param fwhm: numpy with data=fwhm containing full width at half maximum in nm
-        :param threshold: minimum values of the response function to be included in the convolution
-        :return: numpy of convoluted signal
-        '''
-
-        Nwl = len(wl)
-        response = np.full((Nwl), np.nan, dtype=np.float32)
-        for ii in prange(len(fwhm)):
-            sig = super_gaussian_fwhm2sigma(fwhm[ii], expon)
-            rsr = super_gaussian(wl_signal, mu=wl[ii], sigma=sig, expon=expon)
-
-            # remove values above a given threshold to speed up computation
-            idx = rsr > threshold
-            wl_signal_ = wl_signal[idx]
-            signal_ = signal[idx]
-            rsr = rsr[idx]
-
-            response[ii] = np.trapezoid((signal_ * rsr), wl_signal_) / np.trapezoid(rsr, wl_signal_)
-        return response
-
-    def convolve2(self,
-                  signal,
-                  name='signal',
-                  expon=3,
-                  threshold=1e-4,
-                  info={}):
-        '''
-        Convolve with super-Gaussian spectral responses of the bands (full width at half maximum ``fwhm``)
-
-        :param signal: xarray spectral signal to convolve, coord=wl (other dimensions are looped over)
-        :param name: kept for compatibility, the name of ``signal`` is used
-        :param expon: exponent of the super-Gaussian (2 for a Gaussian)
-        :param threshold: minimum values of the response function to be included in the convolution
-        :param info: not used, the attributes of ``signal`` are kept
-        :return: convolved signal on the central wavelengths of the bands (DataArray, or Dataset if
-            ``signal`` has dimensions other than wl)
-        '''
-
-        wl_ref = signal.wl.values
-        fwhm = self.fwhm.values
-        wl = self.fwhm.wl.values
-        xdims = signal.dims
-        attrs = signal.attrs
-        name = signal.name
-        if len(xdims) == 1:
-            signal_int = self.convolve2_(wl_ref, signal.values, wl, fwhm, expon, threshold=threshold)
-            signal_int = xr.DataArray(signal_int, name=name,
-                                      coords={'wl': self.fwhm.wl.values},
-                                      attrs=attrs)
-
-        else:
-            # to handle multidimensional xarray
-            xdims = np.array(xdims)
-            xdims = xdims[xdims != 'wl']
-
-            xsignal_int = []
-            for dim in xdims:
-                xsignal_int_ = []
-                for value, signal_ in signal.groupby(dim):
-                    # print(dim, value)
-                    signal_ = signal_.squeeze()
-                    _ = self.convolve2_(signal_.wl.values, signal_.values, wl, fwhm, expon)
-                    _ = xr.Dataset({name: (['wl'], _)},
-                                   coords={'wl': wl,
-                                           dim: value})
-                    xsignal_int_.append(_)
-                xsignal_int.append(xr.concat(xsignal_int_, dim=dim))
-            signal_int = xr.merge(xsignal_int)  # .to_dataarray()
-            signal_int.attrs = attrs
-
-        return signal_int
-
-    def convolve(self,
-                 signal,
-                 name='signal',
-                 info={}):
-        '''
-        Convolve with Gaussian spectral responses of the bands (full width at half maximum ``fwhm``,
-        width from :py:func:`Gamma2sigma`)
-
-        :param signal: xarray spectral signal to convolve, coord=wl (other dimensions are looped over)
-        :param name: name of the output DataArray
-        :param info: optional parameter to feed the attributes of the output xarray
-        :return: convolved signal on the central wavelengths of the bands
-        '''
-
-        wl_ref = signal.wl.values
-        fwhm = self.fwhm.values
-        wl = self.fwhm.wl.values
-        xdims = signal.dims
-
-        if len(xdims) == 1:
-            signal_int = self.convolve_(wl_ref, signal.values, wl, fwhm)
-            signal_int = xr.DataArray(signal_int, name=name,
-                                      coords={'wl': self.fwhm.wl.values},
-                                      attrs=info)
-
-        else:
-            # to handle multidimensional xarray
-            xdims = np.array(xdims)
-            xdims = xdims[xdims != 'wl']
-
-            xsignal_int = []
-            for dim in xdims:
-                xsignal_int_ = []
-                for value, signal_ in signal.groupby(dim):
-                    # print(dim, value)
-                    signal_ = signal_.squeeze()
-                    _ = self.convolve_(signal_.wl.values, signal_.values, wl, fwhm)
-                    _ = xr.Dataset({name: (['wl'], _)},
-                                   coords={'wl': wl,
-                                           dim: value})
-                    xsignal_int_.append(_)
-                xsignal_int.append(xr.concat(xsignal_int_, dim=dim))
-            signal_int = xr.merge(xsignal_int).to_dataarray()
-            signal_int.attrs = info
-
-        return signal_int
+# Backward-compatible re-exports. The implementation lives in hgrs.legacy.spectral.
+from .legacy.spectral import (
+    Gamma2sigma,
+    Spectral,
+    gaussian,
+    super_gaussian,
+    super_gaussian_fwhm2sigma,
+)

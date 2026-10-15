@@ -54,7 +54,6 @@ for site in sites:
 
         prod = hgrs.Algo(dc_l1c)
         #prod.load_metadata()
-        #prod.get_ndwi()
         plt.figure(figsize=(7,7))
         fig = prod.rgb()
         fig.figure.suptitle(site+', '+str(date),fontsize=19)

@@ -29,6 +29,9 @@ Processing chain
 
    hgrs.run_enmap.main
    hgrs.run_prisma.main
+   hgrs.run_emit.main
+   hgrs.run_hyperion.main
+   hgrs.run_tanager.main
 
 Input data
 ----------
@@ -39,6 +42,8 @@ Input data
    :nosignatures:
 
    hgrs.driver.Driver
+   hgrs.hyperion.HyperionDriver
+   hgrs.emit.EmitDriver
    hgrs.auxdata.AuxData
    hgrs.auxdata.SolarIrradiance
 
@@ -56,6 +61,32 @@ Atmospheric and sunglint correction
    hgrs.hgrs_kernel.Aerosol
    hgrs.hgrs_kernel.Solver
 
+Configuration
+-------------
+
+Settings read by :py:func:`hgrs.config.get_app_config` (see :doc:`installation`); the
+switch :py:data:`hgrs.config.behavior.PREVIOUS_BEHAVIOR` selects the former parameters and algorithms.
+
+.. autosummary::
+   :toctree: generated
+   :template: autosummary/class.rst
+   :nosignatures:
+
+   hgrs.config.AppConfig
+   hgrs.config.AtmosphericCorrectionConfig
+   hgrs.config.ProductCorrectionConfig
+   hgrs.config.WaterVaporConfig
+   hgrs.config.AerosolCorrectionConfig
+   hgrs.config.SceneMetadata
+   hgrs.config.SensorDescription
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+   hgrs.config.get_app_config
+   hgrs.config.loader.load_config
+
 Spectral convolution
 --------------------
 
@@ -64,16 +95,26 @@ Spectral convolution
    :template: autosummary/class.rst
    :nosignatures:
 
-   hgrs.hgrs_kernel.Spectral
+   hgrs.spectral_sensitivity.Gaussian
+   hgrs.spectral_sensitivity.SuperGaussian
+
+Former implementation, kept in :py:mod:`hgrs.legacy.spectral`:
+
+.. autosummary::
+   :toctree: generated
+   :template: autosummary/class.rst
+   :nosignatures:
+
+   hgrs.legacy.spectral.Spectral
 
 .. autosummary::
    :toctree: generated
    :nosignatures:
 
-   hgrs.hgrs_kernel.gaussian
-   hgrs.hgrs_kernel.Gamma2sigma
-   hgrs.hgrs_kernel.super_gaussian
-   hgrs.hgrs_kernel.super_gaussian_fwhm2sigma
+   hgrs.legacy.spectral.gaussian
+   hgrs.legacy.spectral.Gamma2sigma
+   hgrs.legacy.spectral.super_gaussian
+   hgrs.legacy.spectral.super_gaussian_fwhm2sigma
 
 Utilities
 ---------

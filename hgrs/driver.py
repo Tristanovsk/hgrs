@@ -14,9 +14,13 @@ from scipy.interpolate import RegularGridInterpolator
 import datetime as dt
 import logging
 
-from . import SolarIrradiance, Reproj, Misc, Spectral
-logger = logging.getLogger(__name__)
+from . import SolarIrradiance, Reproj, Misc
+from .spectral_sensitivity import BaselineInterp, Gaussian
+from .config import SceneMetadata, SensorDescription
+from .hyperion import HyperionDriver
+from .emit import EmitDriver
 
+logger = logging.getLogger(__name__)
 
 class Driver():
     r'''
@@ -65,14 +69,21 @@ class Driver():
                  satellite='enmap'):
 
         self.satellite = satellite
+        self.scene_metadata = None
 
         if 'prisma' in satellite:
             self.driver = self.read_prisma
         elif 'enmap' in satellite:
             self.driver = self.read_l1c_enmap
+        elif 'tanager' in satellite:
+            self.driver = self.read_tanager
+        elif 'emit' in satellite:
+            self.driver = self.read_emit
         else:
             logger.info('satellite mission not recognized, stop')
             return
+
+
 
     def read_prisma(self,
                     l1c_path: str,
@@ -82,27 +93,98 @@ class Driver():
                     geoproject=True,
                     parallel=False
                     ):
+        """Read a PRISMA scene in the layout expected by ``Process``.
+
+        The returned dataset must provide spectral data as ``(wl, y, x)``;
+        ``sza``, ``vza``, ``raa``, and the mask layers use ``(y, x)``. ``F0``
+        and ``fwhm`` use ``(wl,)``. With ``geoproject=False``, keep the native
+        pixel ``x``/``y`` coordinates and the 2D ``lon``/``lat`` geolocation
+        arrays so the output can be projected later. With geoprojection,
+        ``Reproj`` supplies the target-grid ``x``/``y`` coordinates instead.
+        """
         logger.info('construct L1C image plus angle rasters')
         try:
             dc_l1c = self.read_l1c_prisma(l1c_path,
                                           reflectance_unit=reflectance_unit,
                                           drop_vars=drop_vars)
             dc_l2c = self.read_l2c_prisma(l2c_path)
-        except:
-            logger.info('input file format not recognized, stop')
-            return
+        except Exception as e:
+            logger.info(f'input file format not recognized {l1c_path}, {l2c_path}, stop')
+            raise RuntimeError from e
 
         for param in ['sza', 'vza', 'raa']:
             dc_l1c[param] = dc_l2c[param]
         del dc_l2c
 
+        source_georeferencing = self._source_georeferencing(dc_l1c)
+
         # dc_l1c = dc_l1c.chunk({'x': 200, 'y': 200, 'wl': 10})
 
         if geoproject:
             dc_l1c = Reproj().regridding(dc_l1c, parallel=parallel)
+        else:
+            # Enforce the spectral dimension order in the output contract;
+            # spatial-only variables remain on (y, x).
+            dc_l1c = dc_l1c.transpose("wl", "y", "x", missing_dims="ignore")
+
+        self.scene_metadata = self._make_scene_metadata(
+            dc_l1c,
+            platform='PRISMA',
+            source_georeferencing=source_georeferencing,
+            source_paths={'l1c': l1c_path, 'l2c': l2c_path},
+        )
 
         return dc_l1c
 
+    @staticmethod
+    def _source_georeferencing(dataset):
+        """Capture compact source-grid information before reprojection."""
+        source = {}
+        for name in ('lon', 'lat'):
+            if name in dataset:
+                coordinate = dataset[name]
+                source[f'{name}_bounds'] = (
+                    float(coordinate.min().values),
+                    float(coordinate.max().values),
+                )
+        try:
+            crs = dataset.rio.crs
+        except (AttributeError, RuntimeError):
+            crs = None
+        if crs is not None:
+            source['crs'] = str(crs)
+        for name in ('x', 'y'):
+            if name in dataset.coords and dataset[name].size:
+                source[f'{name}_bounds'] = (
+                    float(dataset[name].min().values),
+                    float(dataset[name].max().values),
+                )
+        return source
+
+    @staticmethod
+    def _make_scene_metadata(
+        dataset,
+        platform,
+        source_georeferencing=None,
+        source_paths=None,
+    ):
+        time = dataset['time']
+        source_georeferencing = dict(source_georeferencing or {})
+        if not source_georeferencing:
+            raise ValueError(f'{platform} source georeferencing was not captured')
+        raw = {
+            'product_name': dataset.attrs.get('L1C_product_name'),
+            'source_paths': dict(source_paths or {}),
+        }
+        return SceneMetadata(
+            platform=platform,
+            acquisition_time=time,
+            solar_zenith=dataset['sza'],
+            viewing_zenith=dataset['vza'],
+            relative_azimuth=dataset['raa'],
+            source_georeferencing=source_georeferencing,
+            raw=raw,
+        )
     def read_l1c_prisma(self,
                         l1c_path: str,
                         reflectance_unit=False,
@@ -139,6 +221,11 @@ class Driver():
         fwhm = xr.DataArray(data=fwhm, name='fwhm',
                             coords=dict(wl=wl),
                             attrs=dict(description="PRISMA relative spectral response parameter"))
+        self.sensor_description = SensorDescription(
+            name='PRISMA',
+            sensor_mod=Gaussian(wl, fwhm.values),
+
+        )
 
         # solar irradiance convolution to the PRISMA spectral response function and scaled
         # by the day of the year
@@ -151,8 +238,14 @@ class Driver():
         # get correction for Sun-Earth distance and correct solar irradiance
         D2 = Misc.earth_sun_correction(DOY)
         F0 = F0 * D2
-        F0_sensor = solar_irr.convolve(F0, fwhm, info={'description': 'Convolved solar irradiance from TSIS data',
-                                                       'unit': 'mW/m2/nm'})
+        F0_sensor = self.sensor_description.convolve(
+            F0, solar_irradiance=True
+        ).rename({'wl_sensor': 'wl'})
+        F0_sensor.name = 'F0'
+        F0_sensor.attrs = {
+            'description': 'Convolved solar irradiance from TSIS data',
+            'unit': 'mW/m2/nm',
+        }
         # DN to TOA radiance
         gain = {"vnir": ds.attrs["ScaleFactor_Vnir"],
                 "swir": ds.attrs["ScaleFactor_Swir"]}
@@ -307,12 +400,147 @@ class Driver():
 
         return data
 
+    def read_tanager(self, l1c_path: str, reflectance_unit=False,
+                     drop_vars=False, geoproject=True, parallel=False):
+        """Read a Planet Tanager basic-radiance HDF5 scene.
+
+        Return an xarray dataset using the hGRS input convention: ``Ltoa`` is
+        ``(y, x, wl)``, image geometry is ``(y, x)``, and ``F0``/``fwhm`` are
+        ``(wl,)``. The source HDF5 radiance is stored band-first.
+        """
+        with h5py.File(l1c_path, 'r') as source:
+            fields = source['/HDFEOS/SWATHS/HYP/Data Fields']
+            geo = source['/HDFEOS/SWATHS/HYP/Geolocation Fields']
+            radiance = fields['toa_radiance'][:]
+            wavelengths = np.asarray(fields['toa_radiance'].attrs['wavelengths'], dtype=float)
+            fwhm = np.asarray(fields['toa_radiance'].attrs['fwhm'], dtype=float)
+            lat = geo['Latitude'][:]
+            lon = geo['Longitude'][:]
+            sun_zenith = fields['sun_zenith'][:]
+            sun_azimuth = fields['sun_azimuth'][:]
+            view_zenith = fields['sensor_zenith'][:]
+            view_azimuth = fields['sensor_azimuth'][:]
+            acquisition_times = geo['Time'][:]
+            beta_cloud = fields['beta_cloud_mask'][:]
+            beta_cirrus = fields['beta_cirrus_mask'][:]
+            nodata = fields['nodata_pixels'][:]
+
+        if radiance.shape[0] != wavelengths.size or fwhm.size != wavelengths.size:
+            raise ValueError('Tanager radiance bands do not match wavelength metadata')
+        wavelength_order = np.argsort(wavelengths)
+        wavelengths = wavelengths[wavelength_order]
+        fwhm = fwhm[wavelength_order]
+        radiance = np.moveaxis(radiance[wavelength_order], 0, -1)
+
+        valid_times = acquisition_times[acquisition_times != -9999]
+        if not valid_times.size:
+            raise ValueError('Tanager scene has no valid acquisition times')
+        date = dt.datetime.utcfromtimestamp(float(np.mean(valid_times)))
+
+        # Decode fill values before using angles or geolocation downstream.
+        lat = np.where(lat == -9999, np.nan, lat)
+        lon = np.where(lon == -9999, np.nan, lon)
+        sun_zenith = np.where(sun_zenith == -9999, np.nan, sun_zenith)
+        sun_azimuth = np.where(sun_azimuth == -9999, np.nan, sun_azimuth)
+        view_zenith = np.where(view_zenith == -9999, np.nan, view_zenith)
+        view_azimuth = np.where(view_azimuth == -9999, np.nan, view_azimuth)
+
+        self.sensor_description = SensorDescription(
+            name='Tanager',
+            sensor_mod=Gaussian(wavelengths, fwhm),
+
+        )
+        solar_irradiance = SolarIrradiance()
+        solar_distance_factor = Misc.earth_sun_correction(date.timetuple().tm_yday)
+        F0 = solar_irradiance.tsis * solar_distance_factor
+        F0_sensor = self.sensor_description.convolve(
+            F0, solar_irradiance=True
+        ).rename({'wl_sensor': 'wl'})
+
+        data = xr.Dataset(
+            data_vars={
+                'Ltoa': (('y', 'x', 'wl'), radiance),
+                'F0': (('wl',), F0_sensor.values),
+                'fwhm': (('wl',), fwhm),
+                'lon': (('y', 'x'), lon),
+                'lat': (('y', 'x'), lat),
+                'sza': (('y', 'x'), sun_zenith),
+                'saa': (('y', 'x'), sun_azimuth),
+                'vza': (('y', 'x'), view_zenith),
+                'vaa': (('y', 'x'), view_azimuth),
+                'raa': (('y', 'x'), (sun_azimuth - view_azimuth) % 360),
+                'nodata_pixels': (('y', 'x'), nodata),
+                'beta_cloud_mask': (('y', 'x'), beta_cloud),
+                'beta_cirrus_mask': (('y', 'x'), beta_cirrus),
+            },
+            coords={
+                'x': np.arange(lon.shape[1]),
+                'y': np.arange(lon.shape[0]),
+                'wl': wavelengths,
+                'time': date,
+            },
+            attrs={
+                'description': 'Tanager basic radiance scene',
+                'platform': 'Tanager',
+                'L1C_product_name': os.path.basename(l1c_path),
+                'acquisition_date': date.isoformat(),
+            },
+        )
+        data['Ltoa'] = data.Ltoa.where(data.Ltoa >= 0)
+        if reflectance_unit:
+            data['Rtoa'] = np.pi * data.Ltoa / (
+                data.F0 * np.cos(np.radians(data.sza))
+            )
+            valid = ((data.beta_cloud_mask == 0) &
+                     (data.beta_cirrus_mask == 0) &
+                     (data.nodata_pixels == 0))
+            data['Rtoa'] = data.Rtoa.where(valid)
+            if drop_vars:
+                data = data.drop_vars('Ltoa')
+
+        data.F0.attrs.update(
+            unit='mW/m2/nm',
+            definition='Solar irradiance corrected for Sun-Earth distance',
+        )
+        if 'Ltoa' in data:
+            data.Ltoa.attrs.update(unit='mW/m2/sr/nm', definition='Top-of-atmosphere radiance')
+        data.fwhm.attrs.update(unit='nm', definition='Full Width at Half Maximum')
+
+        source_georeferencing = self._source_georeferencing(data)
+        if geoproject:
+            native_resolution_m = Reproj.ground_sampling_resolution_m(lon, lat)
+            data.attrs['native_ground_sampling_m'] = native_resolution_m
+            data = Reproj().regridding(
+                data,
+                output_resolution_m=native_resolution_m,
+                parallel=parallel,
+            )
+        self.scene_metadata = self._make_scene_metadata(
+            data,
+            platform='Tanager',
+            source_georeferencing=source_georeferencing,
+            source_paths={'l1c': l1c_path},
+        )
+        return data
+
+    def read_emit(self, l1b_path: str, sun_azimuth, sun_elevation,
+                  view_azimuth, view_zenith, *, geoproject=False,
+                  ortho=False, parallel=False):
+        """Read an EMIT L1B_RAD granule with explicit scene geometry."""
+        reader = EmitDriver(l1b_path)
+        data = reader.read(
+            sun_azimuth, sun_elevation, view_azimuth, view_zenith,
+            geoproject=geoproject, ortho=ortho, parallel=parallel,
+        )
+        self.sensor_description = reader.sensor_description
+        self.scene_metadata = reader.scene_metadata
+        return data
+
     def read_l1c_enmap(self,
                        l1c_path: str,
                        reflectance_unit=False,
                        drop_vars=False,
-                       filter_bad_bands=True,
-                       expon=1.8
+                       filter_bad_bands=True
                        ):
 
         for ext in ['BIL','TIF']:
@@ -427,24 +655,36 @@ class Driver():
         F0 = F0 * D2
         self.F0 = F0
 
-        # convolution with spectral responses
-        spectral = Spectral(data.wl, data.fwhm.values)
-        # TODO check which one better
-        #F0 = spectral.convolve2(F0, expon=expon)
-        F0 = spectral.convolve(F0)
+        # Preserve the established EnMAP two-stage irradiance resampling.
+        self.sensor_description = SensorDescription(
+            name='EnMAP',
+            sensor_mod=Gaussian(data.wl.values, data.fwhm.values),
 
-        F0_sensor = solar_irr.convolve(F0, data.fwhm, info={'description': 'Convolved solar irradiance from TSIS data',
-                                                            'unit': 'mW/m2/nm'})
+        )
+        F0 = self.sensor_description.convolve(F0).rename({'wl_sensor': 'wl'})
 
-        data = xr.Dataset(data_vars=dict(Ltoa=data.Ltoa,
-                                         F0=(['wl'], F0_sensor.values),
-                                         fwhm=(['wl'], data.fwhm.values),
-                                         sza=(["y", "x"], sza),
-                                         saa=(["y", "x"], saa),
-                                         vza=(["y", "x"], vza),
-                                         vaa=(["y", "x"], vaa),
-                                         raa=(['y', 'x'], raa),
-                                         ),
+        # Apply the same sensor response operator used later in atmospheric correction.
+        F0_sensor = self.sensor_description.convolve(
+            F0, solar_irradiance=True
+        ).rename({'wl_sensor': 'wl'})
+        F0_sensor.name = 'F0'
+        F0_sensor.attrs = {
+            'description': 'Convolved solar irradiance from TSIS data',
+            'unit': 'mW/m2/nm',
+        }
+
+        d_vars = dict(
+            Ltoa=data.Ltoa,
+            F0=(['wl'], F0_sensor.values),
+            fwhm=(['wl'], data.fwhm.values),
+            sza=(["y", "x"], sza),
+            saa=(["y", "x"], saa),
+            vza=(["y", "x"], vza),
+            vaa=(["y", "x"], vaa),
+            raa=(['y', 'x'], raa),
+        )
+
+        data = xr.Dataset(data_vars=d_vars,
                           coords=dict(
                               x=data.x.values,
                               y=data.y.values,
@@ -506,5 +746,12 @@ class Driver():
         data.fwhm.attrs['unit'] = 'nm'
         data.fwhm.attrs['definition'] = 'Full Width at Half Maximum'
         # data.attrs['crs'] = CRS.from_epsg(32630)
+
+        self.scene_metadata = self._make_scene_metadata(
+            data,
+            platform='EnMAP',
+            source_georeferencing=self._source_georeferencing(data),
+            source_paths={'l1c': l1c_path, 'metadata': metadata_path},
+        )
 
         return data
