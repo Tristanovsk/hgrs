@@ -10,8 +10,9 @@ v1.0.7: 2025-11-07 correct bug for Earth-Sun distance, option to remove bad EnMA
 v1.1.0: new processor for aerosol optical thickness based on non-negativity of retrieved reflectance
 v1.1.1: clean up and check which function gaussian, supergaussian is the most suited for spectral integration
 v1.1.2: set windows at [1,1] for filter2D (smoothing), need to improve smoothing
+v1.2.0dev0: merge of antoine_refactor (EMIT, Hyperion, Tanager drivers, configuration package)
 '''
-__version__ = '1.1.2'
+__version__ = '1.2.0dev0'
 
 from .utils import Reproj, Misc
 from .auxdata import AuxData, SolarIrradiance
