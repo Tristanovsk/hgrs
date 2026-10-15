@@ -42,6 +42,8 @@ class LUTTables:
             self.full_Twv_lut = xr.open_dataset(WATER_VAPOR_TRANSMITTANCE_FILE)
         else:
             self.full_Twv_lut = self._build_twv_lut() # 
+        # last sensor description and its convolved Twv (all its bands), see interp_twv
+        self._convolved_twv = (None, None)
 
     def _build_twv_lut(self):
         air_masses = np.array(
@@ -91,8 +93,13 @@ class LUTTables:
         if behavior.PREVIOUS_BEHAVIOR:
             return self.full_Twv_lut.interp(wl=target_wavelengths)
 
-        transmittance = self.full_Twv_lut.Twv
-        transmittance = sensor_description.convolve(transmittance)
+        # the convolution gives all the sensor bands whatever the requested wavelengths:
+        # done once per sensor description
+        if self._convolved_twv[0] is not sensor_description:
+            self._convolved_twv = (
+                sensor_description, sensor_description.convolve(self.full_Twv_lut.Twv)
+            )
+        transmittance = self._convolved_twv[1]
         wavelength_dimension = (
             "wl_sensor" if "wl_sensor" in transmittance.dims else "wl"
         )

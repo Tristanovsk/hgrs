@@ -53,6 +53,16 @@ def super_gaussian_spectral_response(wl_signal, wl_i, fwhm_i, expon=3.0):
     return super_gaussian_sr(wl_signal, mu=wl_i, sigma=sig, expon=expon)
 
 
+def trapezoid(y, x, axis):
+    """Trapezoidal integral of ``y`` along ``axis`` with the operations of xarray ``integrate``."""
+    shape = [1] * y.ndim
+    shape[axis] = -1
+    dx = np.diff(x).reshape(shape)
+    upper = np.take(y, np.arange(1, y.shape[axis]), axis)
+    lower = np.take(y, np.arange(y.shape[axis] - 1), axis)
+    return np.sum(dx * 0.5 * (upper + lower), axis=axis)
+
+
 def resample_to_target_raster(
     signal,
     da_rsr,
@@ -61,32 +71,47 @@ def resample_to_target_raster(
     threshold=1e-6,
     fallback_int=[],
 ):
+    """
+    Band values of ``signal``: integral of ``signal`` weighted by each spectral response of ``da_rsr``
+    over the wavelengths where the response is above ``threshold`` (or from ``threshold`` included if
+    it is 0), divided by the integral of the response. Trapezoidal integrals as xarray ``integrate``,
+    computed with numpy (one xarray ``integrate`` per band is ~10x slower).
+    """
+    axis = signal.get_axis_num(dim_to_resample)
+    values = signal.values
+    wl = signal[dim_to_resample].values
+    shape = [1] * values.ndim
+    shape[axis] = -1
+    responses = da_rsr.transpose(dim_tgt, dim_to_resample).values
     list_result = []
 
-    for ii in range(len(da_rsr[dim_tgt])):
-        wl_c = da_rsr.wl_sensor[ii].values
-
-        rsr = da_rsr.isel(wl_sensor=ii)
+    for ii, wl_c in enumerate(da_rsr[dim_tgt].values):
+        rsr = responses[ii]
         mask_curr = rsr >= threshold if threshold == 0 else rsr > threshold
         number_valid = np.sum(mask_curr)
-        signal_slice = signal.isel(wl=mask_curr)
-        rsr_slice = rsr.isel(wl=mask_curr)
-        norm = rsr_slice.integrate(coord=dim_to_resample)
-        result = (signal_slice * rsr_slice).integrate(coord=dim_to_resample) / norm
         if (
             len(fallback_int) > 0
             and wl_c >= fallback_int[0]
             and wl_c <= fallback_int[1]
         ):
-            result = signal.interp(wl=wl_c).rename({"wl": "wl_sensor"})
+            result = signal.interp({dim_to_resample: wl_c}).values
         elif number_valid <= 3:
             raise ValueError(f"issue when resampling {signal}, {ii}")
         else:
-            pass
+            index = np.flatnonzero(mask_curr)
+            wl_slice, rsr_slice = wl[index], rsr[index]
+            weighted = np.take(values, index, axis) * rsr_slice.reshape(shape)
+            result = trapezoid(weighted, wl_slice, axis) / trapezoid(rsr_slice, wl_slice, 0)
 
         list_result.append(result)
-    output = xr.concat(list_result, dim=dim_tgt)
-    return output
+
+    other_dims = [dim for dim in signal.dims if dim != dim_to_resample]
+    coords = {
+        name: coord for name, coord in signal.coords.items()
+        if dim_to_resample not in coord.dims
+    }
+    coords[dim_tgt] = da_rsr[dim_tgt].values
+    return xr.DataArray(np.stack(list_result), dims=(dim_tgt, *other_dims), coords=coords)
 
 
 def resample_1d_to_target_raster(signal, rsr, dim_to_resample="wl", threshold=1e-6):
@@ -111,7 +136,7 @@ class GenericSpecSen:
     def get_rsr(self, wl_signal, dim="wl"):
         l_rsr = []
         for ii in range(self.number_bands):
-            rsr = self.get_rsr_band(wl_signal, ii)
+            rsr = self.get_rsr_band(np.asarray(wl_signal), ii)
 
             l_rsr.append(rsr)
         da_rsr = xr.DataArray(l_rsr, coords={"wl_sensor": self.bands, dim: wl_signal})
@@ -206,22 +231,23 @@ class Gaussian(GenericSpecSen):
             raise ValueError("Solar irradiance convolution expects a 1D spectrum")
 
         output = []
+        values = signal.values
+        wl_ref = signal[dim].values
         for ii in range(self.number_bands):
             fwhm = self.fwhm[ii]
             sigma = fwhm * np.sqrt(2.) / (
                 np.sqrt(2. * np.log(2.)) * 2.
             )
-            wl_ref = signal[dim]
             rsr = 1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(
                 -(wl_ref - self.wls[ii]) ** 2 / (2 * sigma ** 2)
             )
-            weighted_integral = (signal * rsr).integrate(dim)
+            weighted_integral = trapezoid(values * rsr, wl_ref, 0)
             response_integral = np.trapezoid(rsr, wl_ref)
             output.append(weighted_integral / response_integral)
 
-        return xr.concat(output, dim=xr.DataArray(
-            self.bands, dims="wl_sensor", name="wl_sensor"
-        ))
+        coords = {name: coord for name, coord in signal.coords.items() if dim not in coord.dims}
+        coords["wl_sensor"] = self.bands
+        return xr.DataArray(np.array(output), dims="wl_sensor", coords=coords)
 
 
 class SuperGaussian(GenericSpecSen):
