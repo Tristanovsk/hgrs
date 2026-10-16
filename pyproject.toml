@@ -54,6 +54,7 @@ dynamic = ["version"]
 
 [tool.setuptools.packages.find]
 where = ["."]
+include = ["hgrs*"]
 
 [tool.setuptools.package-data]
 "hgrs" = ['data/lut/*.nc', 'data/aux/*']
