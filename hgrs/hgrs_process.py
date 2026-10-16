@@ -614,7 +614,7 @@ class Process():
         l2_prod.attrs['processing_date'] = str(dt.datetime.now())
         l2_prod.attrs['acquisition_date'] = str(l2_prod.attrs['acquisition_date'])
         l2_prod.attrs['hgrs_version'] = hgrs.__version__
-        l2_prod.attrs['description'] = 'PRISMA L2A-hGRS cube data'
+        l2_prod.attrs['description'] = f'{prod.scene_metadata.platform} L2A-hGRS cube data'
         l2_prod.attrs['DEM'] = 'not available'
         l2_prod.attrs['aerosol_model'] = aero_retrieval.aerosol_model
         l2_prod.attrs['geoprojection'] = 'native' if not geoproject else 'reprojected'

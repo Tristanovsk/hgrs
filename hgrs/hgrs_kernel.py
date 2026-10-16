@@ -224,6 +224,7 @@ import os
 import numpy as np
 import pandas as pd
 import xarray as xr
+import dask
 
 from numba import jit
 from scipy import ndimage
@@ -488,14 +489,15 @@ class Product():
             & (b2200 < self.water_parameters.mask.sunglint_threshold)
             & (green_swir_index > self.water_parameters.mask.green_swir_index_threshold)
         )
+        # mask and masked Rtoa computed in one pass: the bands of the tests are read once, and the mask
+        # is not left lazy (it would read the image again when the product is written)
+        water_mask, rtoa = dask.compute(water_mask, self.raster.Rtoa.where(water_mask))
         self.raster['water_mask'] = water_mask.rename('water_mask')
         self.raster['water_mask'].attrs.update(
             long_name='spectral water mask',
             description='True where the pixel passes all configured spectral water tests',
         )
-        self.raster['Rtoa'] = self.raster.Rtoa.where(
-            water_mask
-        ).load()
+        self.raster['Rtoa'] = rtoa
 
     def apply_land_mask(self):
         """Mask PRISMA pixels classified as land; leave other sensors unchanged."""
