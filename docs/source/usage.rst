@@ -14,16 +14,16 @@ Command line
 
 EnMAP:
 
-.. literalinclude:: ../../hgrs/run_enmap.py
+.. literalinclude:: ../../hgrs/cli.py
    :language: text
-   :start-at: Usage:
+   :start-after: ENMAP_USAGE = '''
    :end-before: '''
 
 PRISMA:
 
-.. literalinclude:: ../../hgrs/run_prisma.py
+.. literalinclude:: ../../hgrs/cli.py
    :language: text
-   :start-at: Usage:
+   :start-after: PRISMA_USAGE = '''
    :end-before: '''
 
 Python

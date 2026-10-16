@@ -82,8 +82,11 @@ All notable changes to hGRS are listed here, most recent first. The format follo
   `Process.execute` selects the driver by the `sensor` name (`hgrs.drivers.get_driver`), and each driver
   declares its required geometry arguments and the chunking of its L2A product. `sensor='prisma'` can be
   given explicitly. An unreadable EnMAP image raises an error instead of stopping silently.
-- `hgrs.Driver`, `hgrs.emit` and `hgrs.hyperion` are deprecated (kept with a `DeprecationWarning`);
-  `EmitDriver` and `HyperionDriver` take the image path in `read` (or, optionally, in the constructor).
+- `hgrs.Driver` is deprecated (kept with a `DeprecationWarning`); `EmitDriver` and `HyperionDriver`
+  take the image path in `read` (or, optionally, in the constructor).
+- The command-line tools are in one module, `hgrs.cli` (one function per sensor), instead of
+  `hgrs.run_enmap`, `hgrs.run_prisma`...: the `hgrs_*` commands and their options are unchanged,
+  `python -m hgrs.run_*` is replaced by the commands.
 
 ### Fixed
 - `filter2d`: the window wrapped around the edges of the image and the mean was computed in place,
@@ -93,6 +96,8 @@ All notable changes to hGRS are listed here, most recent first. The format follo
 - Log messages of `run_enmap` and `run_prisma` refer to `hgrs_process` instead of `grs_process`.
 - `run_enmap` docstring: EnMAP L1C input instead of PRISMA L1.
 - Read the Docs build configuration.
+- The wheel contains only the `hgrs` package: the 1.1.2 wheel also installed top-level `docs`,
+  `test`, `utils` and `postprocessing` packages.
 
 ## [1.1.2] - 2026-06-23
 

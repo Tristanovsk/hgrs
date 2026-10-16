@@ -28,19 +28,19 @@ The processor is invoked through one command-line executable per sensor, which w
      - Entry point
      - Sensor
    * - ``hgrs_enmap``
-     - :py:func:`hgrs.run_enmap.main`
+     - :py:func:`hgrs.cli.enmap`
      - EnMAP L1C
    * - ``hgrs_prisma``
-     - :py:func:`hgrs.run_prisma.main`
+     - :py:func:`hgrs.cli.prisma`
      - PRISMA L1 (+ L2C for the angles)
    * - ``hgrs_emit``
-     - :py:func:`hgrs.run_emit.main`
+     - :py:func:`hgrs.cli.emit`
      - EMIT L1B radiance
    * - ``hgrs_hyperion``
-     - :py:func:`hgrs.run_hyperion.main`
+     - :py:func:`hgrs.cli.hyperion`
      - EO-1 Hyperion L1R
    * - ``hgrs_tanager``
-     - :py:func:`hgrs.run_tanager.main`
+     - :py:func:`hgrs.cli.tanager`
      - Tanager basic radiance
 
 The ``hgrs_config`` command prints the configuration in use and checks the LUTs;

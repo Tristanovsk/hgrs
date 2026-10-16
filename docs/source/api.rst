@@ -27,11 +27,11 @@ Processing chain
    :toctree: generated
    :nosignatures:
 
-   hgrs.run_enmap.main
-   hgrs.run_prisma.main
-   hgrs.run_emit.main
-   hgrs.run_hyperion.main
-   hgrs.run_tanager.main
+   hgrs.cli.enmap
+   hgrs.cli.prisma
+   hgrs.cli.emit
+   hgrs.cli.hyperion
+   hgrs.cli.tanager
 
 Input data
 ----------
