@@ -33,30 +33,6 @@ Processing chain
    hgrs.run_hyperion.main
    hgrs.run_tanager.main
 
-L1 drivers
-----------
-
-.. automodule:: hgrs.drivers
-   :no-members:
-
-.. autosummary::
-   :toctree: generated
-   :nosignatures:
-
-   hgrs.drivers.get_driver
-
-.. autosummary::
-   :toctree: generated
-   :template: autosummary/class.rst
-   :nosignatures:
-
-   hgrs.drivers.base.L1Driver
-   hgrs.drivers.EnmapDriver
-   hgrs.drivers.PrismaDriver
-   hgrs.drivers.EmitDriver
-   hgrs.drivers.HyperionDriver
-   hgrs.drivers.TanagerDriver
-
 Input data
 ----------
 
@@ -150,6 +126,33 @@ Utilities
 
    hgrs.utils.Misc
    hgrs.utils.Reproj
+
+L1 drivers
+----------
+
+.. this section must stay the last one with autosummary entries: the automodule below sets the current
+   module, under which autosummary looks for all the entries that follow (hence the relative names)
+
+.. automodule:: hgrs.drivers
+   :no-members:
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+   get_driver
+
+.. autosummary::
+   :toctree: generated
+   :template: autosummary/class.rst
+   :nosignatures:
+
+   base.L1Driver
+   EnmapDriver
+   PrismaDriver
+   EmitDriver
+   HyperionDriver
+   TanagerDriver
 
 Module overview
 ---------------
