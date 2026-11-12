@@ -6,6 +6,8 @@ All notable changes to hGRS are listed here, most recent first. The format follo
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-12
+
 ### Added
 - User configuration file `~/.config/hgrs/config.yml` (or `$XDG_CONFIG_HOME/hgrs/config.yml`),
   read at run time on top of the packaged defaults of `hgrs/config/default_config.yml`; the `HGRS_CONFIG` and
