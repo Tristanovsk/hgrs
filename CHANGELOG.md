@@ -54,6 +54,17 @@ All notable changes to hGRS are listed here, most recent first. The format follo
   files with CRLF line endings.
 
 ### Changed
+- **Products differ from 1.1.2** with the default settings, because of the reworked water vapor and
+  aerosol solvers (A. Lavard-Meyer, see below): the water vapor transmittance LUT is built from the
+  gas absorption and convolved with the spectral response of the sensor (instead of interpolating a
+  precomputed LUT), the spectral response uses a slightly different (super-)Gaussian formula, and the
+  mega-pixels without a retrieved TCWV are filled. On a 400 x 400 pixel water subset of an EnMAP
+  L1C image (Lucinda, 2026-05-31): TCWV -13 %, Rrs -6.8 % at 418 nm, -0.8 to -1.8 % from 459 to
+  577 nm, and a bias below 3e-5 sr-1 beyond 600 nm. The performance changes of this version do not
+  change the products.
+  `previous_behavior: true` (or `HGRS_PREVIOUS_BEHAVIOR=1`) gives the 1.1.2 water vapor retrieval
+  back (same TCWV), but not exactly the 1.1.2 aerosol retrieval: Rrs then differs by -2.3 % at
+  418 nm and -0.7 to -1.3 % from 459 to 577 nm.
 - AOT smoothing set in the configuration (`aerosol: smoothing_method`, `smoothing_window`,
   `smoothing_footprint`): `weighted_local` by default, mean of the AOT over 3 x 3 mega-pixels weighted
   by their number of water pixels (instead of no weighted smoothing), then NaN-mean gap filling over
