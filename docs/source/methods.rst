@@ -123,6 +123,44 @@ with :math:`\kappa` = ``coef_abs_scat`` = 0.35. The transmittance, for the mean 
    T_g(\lambda) = \exp\left(-\bar M\, \tau_g(\lambda)\right), \qquad
    R(\lambda) = \frac{R_{TOA}(\lambda)}{T_g(\lambda)}
 
+Coupling of the absorption with the scattering
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The direct-beam transmittance above is exact for the light crossing the atmosphere along straight lines (sun
+glint, nearly the water-leaving signal), not for the path reflectance: the photons scattered by the molecules and
+aerosols above the absorbers shortcut part of the absorbing column, and their paths are spread. With
+``gas_coupling: path_length`` (default), each term has its own transmittance (:py:mod:`hgrs.gas_coupling`, ported
+from ``radcalnet_oc``):
+
+.. math::
+
+   R_{TOA} = T_{atm}\, R_{diff} + T_d\, R_{dir} + T_w\, \pi R_{rs}\, T^{\downarrow} t^{\uparrow}
+
+with :math:`T_d = T_g T_{wv}` the direct-beam transmittance and, in the O2 and H2O windows of 684-990 nm (O2-B,
+H2O 720, O2-A, H2O 820, 900 and 940 nm), the photon path-length model for the path reflectance (:math:`T_{atm}`)
+and the water-leaving signal (:math:`T_w`):
+
+.. math::
+
+   T = \left(1 + s^2\, \eta\, \bar M \tau\right)^{-1/s^2}
+
+channel by channel, :math:`\tau` the vertical optical thickness of the channel, :math:`\eta` the ratio of the
+mean absorber path to the geometric one and :math:`s^2` the relative variance of the paths (Gamma distribution),
+both linear in :math:`\bar M - 2`, :math:`\tau_{550} - 0.1` and :math:`\ln(W/20\,\mathrm{kg\,m^{-2}})`, fitted
+on SOS-ABS coupled simulations. O3, NO2 and CH4 keep the direct-beam air mass, and :math:`\kappa` = 1 in the
+windows. The correction becomes
+
+.. math::
+
+   R_{rs} = \left[\frac{R_{TOA}}{T_d} - f_{path} R_{diff} - R_{dir}\right] \frac{f_w}{\pi}, \qquad
+   f_{path} = \frac{T_{atm}}{T_d}, \quad f_w = \frac{T_d}{T_w}
+
+and :math:`f_{path}` also scales the path reflectance of the aerosol fit. With ``o2_model: lbl`` (default), the O2
+absorption of the O2-B (683-702 nm) and O2-A (755-775 nm) bands is computed line by line (HITRAN), averaged in the
+cells of the gaseous LUT, in place of the REPTRAN table, which makes these bands too deep at sub-nanometre
+resolution. ``gas_coupling: decoupled`` and ``o2_model: reptran`` give the results of hGRS 1.2.0. The analysis is
+in the research notebooks (:doc:`tutorials/research/index`).
+
 Water vapor
 -----------
 
@@ -132,6 +170,16 @@ background attenuated by water vapor:
 .. math::
 
    R(\lambda) \simeq T_{wv}(\lambda; W, \bar M)\, (a\lambda + b), \qquad \lambda\ \text{in µm}
+
+With ``gas_coupling: path_length``, the path reflectance is modelled with its own transmittance: the shape
+:math:`R_p(\lambda)` of the path reflectance of the TOA LUT at the first-guess AOT, with a free amplitude :math:`k`,
+
+.. math::
+
+   R(\lambda) \simeq T_{atm}(\lambda; W)\, k\, R_p(\lambda) + T_{wv}(\lambda; W, \bar M)\, (a\lambda + b)
+
+(first guess of :math:`W`: CAMS). The decoupled model retrieves an effective column, which over dark water is a
+fraction of the true one.
 
 where :math:`T_{wv}` is interpolated in a pre-computed LUT. :math:`(W, a, b)` are retrieved by
 non-linear least squares within :math:`[0, 60] \times [-10, 1] \times [0, 1]`; the uncertainty of

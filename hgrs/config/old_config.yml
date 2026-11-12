@@ -21,6 +21,8 @@ atmospheric_correction:
     ndwi_threshold: 0.01
     green_swir_index_threshold: 0.1
     gas_absorption_scattering_coefficient: 0.35
+    gas_coupling: decoupled
+    o2_model: reptran
     prisma_land_mask_enabled: false
     prisma_land_valid_classes: [0, 5, 6]
     prisma_land_forbidden_classes: [1, 2, 3, 4, 10]

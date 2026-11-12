@@ -43,6 +43,12 @@ class ProductCorrectionConfig:
     ndwi_threshold: float = 0.01
     green_swir_index_threshold: float = 0.1
     gas_absorption_scattering_coefficient: float = 0.35
+    # coupling of the gaseous absorption with the scattering (hgrs.gas_coupling): 'path_length' or
+    # 'decoupled' (direct-beam transmittance for the whole signal); O2 absorption in the O2-B and O2-A
+    # bands: 'lbl' (line by line) or 'reptran'. The defaults here are the former behavior; the
+    # packaged default_config.yml selects 'path_length' and 'lbl'.
+    gas_coupling: str = "decoupled"
+    o2_model: str = "reptran"
     prisma_land_mask_enabled: bool = True
     prisma_land_valid_classes: tuple[int, ...] = (0, 5, 6)
     prisma_land_forbidden_classes: tuple[int, ...] = (1, 2, 3, 4, 10)
@@ -276,6 +282,8 @@ class AtmosphericCorrectionConfig:
             "prisma_land_mask_enabled": ("product", "prisma_land_mask_enabled"),
             "prisma_land_valid_classes": ("product", "prisma_land_valid_classes"),
             "prisma_land_forbidden_classes": ("product", "prisma_land_forbidden_classes"),
+            "gas_coupling": ("product", "gas_coupling"),
+            "o2_model": ("product", "o2_model"),
             "aerosol_absorption_scattering_coefficient": (
                 "product", "gas_absorption_scattering_coefficient"
             ),

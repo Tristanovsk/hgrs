@@ -353,6 +353,8 @@ class Process():
         wv_retrieval = hgrs.WaterVapor(prod)
         wv_retrieval.solve(pool=pool)
         prod.get_wv_transmittance_raster(wv_retrieval.water_vapor)
+        # coupled gaseous transmittance (gas_coupling: path_length), first-guess AOT for the aerosol retrieval
+        prod.get_coupling_factors(wv_retrieval.water_vapor, prod.aerosol_parameters.aod550_initial)
         prod.water_vapor_correction()
         logger.info('mask bands where gaseous abs. is too strong')
         Tg_tot = prod.Tg_other * prod.Twv_raster.mean(['x', 'y'])
@@ -378,6 +380,10 @@ class Process():
         aero_retrieval.solve(pool=pool)
         aero_retrieval.get_atmo_parameters(prod)
         self.aero_retrieval = aero_retrieval
+        # coupled gaseous transmittance with the retrieved AOT (scene mean)
+        aot550_scene = float(aero_retrieval.aero_img.aot_ref.mean())
+        if np.isfinite(aot550_scene):
+            prod.get_coupling_factors(wv_retrieval.water_vapor, aot550_scene)
 
         # ------------------------------------------
         # full resolution processing
@@ -417,6 +423,11 @@ class Process():
 
         Rdiff = full_resolution_blocks(aero_retrieval.atmo_img.Rtoa_diff)
         Tdir = full_resolution_blocks(aero_retrieval.atmo_img.Tdir)
+        # coupled gaseous transmittance: path reflectance x f_path, water-leaving signal x f_w (1 if decoupled)
+        coupled = prod.f_path_raster is not None
+        if coupled:
+            f_path = full_resolution_blocks(prod.f_path_raster)
+            f_w = full_resolution_blocks(prod.f_w_raster)
         sunglint_eps = aero_retrieval.sunglint_eps.sel(wl=wl).values[:, None, None]
         sunglint = np.isin(wl, wl.sel(wl=prod.water_parameters.wl_sunglint))
         logger.info('Begin aerosol correction and sunglint removal')
@@ -425,7 +436,10 @@ class Process():
         BRDF_sunglint = np.full((height, width), np.nan, dtype=np.float32)
 
         for block in blocks:
-            Rcorr = Rtoa[(slice(None), *block)] - Rdiff(*block)
+            if coupled:
+                Rcorr = Rtoa[(slice(None), *block)] - f_path(*block) * Rdiff(*block)
+            else:
+                Rcorr = Rtoa[(slice(None), *block)] - Rdiff(*block)
             Tdir_ = Tdir(*block)
 
             # BRDF: mean of the sunglint bands, skipping NaN
@@ -435,7 +449,10 @@ class Process():
                 BRDF_sunglint[block] = np.where(valid, brdf, 0).sum(axis=0) / valid.sum(axis=0)
 
             Rdir = Tdir_ * sunglint_eps * BRDF_sunglint[block]
-            Rrs[(slice(None), *block)] = (Rcorr - Rdir) / np.pi
+            if coupled:
+                Rrs[(slice(None), *block)] = (Rcorr - Rdir) * f_w(*block) / np.pi
+            else:
+                Rrs[(slice(None), *block)] = (Rcorr - Rdir) / np.pi
 
         l2_prod = xr.Dataset(dict(Rrs=(["wl", "y", "x"], Rrs),
                                   brdfg_full=(["y", "x"], BRDF_sunglint), ),

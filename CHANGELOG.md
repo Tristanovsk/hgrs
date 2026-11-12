@@ -6,6 +6,36 @@ All notable changes to hGRS are listed here, most recent first. The format follo
 
 ## [Unreleased]
 
+### Added
+- Coupling of the gaseous absorption with the scattering, `hgrs.gas_coupling` (ported from
+  [radcalnet_oc](https://github.com/Tristanovsk/radcalnet_oc), commit d4f6c6f): the path reflectance and the
+  water-leaving signal have their own gaseous transmittance, from the photon path-length model
+  $T = (1 + s^2 \eta \bar M \tau)^{-1/s^2}$ fitted on SOS-ABS coupled simulations, in the O2 and H2O windows of
+  684-990 nm (`data/aux/gas_coupling_ppld.csv`); the sun glint keeps the direct-beam transmittance. Used in the water
+  vapor retrieval (path reflectance of the TOA LUT at the first-guess AOT with a free amplitude, first guess of the
+  column from CAMS), in the aerosol fit and in the final correction,
+  $R_{rs} = [R_{toa}/T_d - f_{path} R_{diff} - R_{dir}]\, f_w / \pi$. Setting
+  `atmospheric_correction: product: gas_coupling: path_length | decoupled`.
+- Line-by-line O2 absorption in the O2-B (683-702 nm) and O2-A (755-775 nm) bands (HITRAN, table
+  `data/lut/o2_lbl_tau.nc` of radcalnet_oc), in place of the REPTRAN table, which makes these bands too deep at
+  sub-nanometre resolution. Setting `atmospheric_correction: product: o2_model: lbl | reptran`.
+- Research notebooks *Coupling of absorption and scattering* (transmittance of each term against SOS-ABS, water vapor
+  retrieval, O2 bands) and their helpers, in `docs/source/tutorials/research`.
+
+### Changed
+- The default settings use `gas_coupling: path_length` and `o2_model: lbl`: the products change in the O2 and H2O
+  bands of 684-990 nm and the retrieved water vapor column changes; they are unchanged elsewhere (median Rrs within
+  1e-5). `gas_coupling: decoupled` with `o2_model: reptran` (and `previous_behavior: true`) give the results of
+  1.2.0 (identical products on the Lucinda EnMAP test scene). In the coupled windows the factor
+  `gas_absorption_scattering_coefficient` of O2, O4 and CO2 is 1. On two dark-water EnMAP scenes (Lucinda
+  2026-05-31, Brasil 2024-06-12), median residual band depth of Rrs (sr-1), decoupled -> coupled: 686 nm
+  +3.0e-4 -> +2e-5 and +3.3e-4 -> +2e-5, 941 nm +6.7e-4 -> +4.7e-4 and +8.2e-4 -> +4.8e-4, but 720, 764 and 817 nm
+  more negative (e.g. 764 nm -4.5e-5 -> -5.6e-4 and -2.9e-4 -> -7.7e-4); TCWV 0.98 -> 1.06 and 2.58 -> 3.13
+  kg m-2 (CAMS 11.0 and 14.1). On both scenes the AOT of the retrieval is at its lower bound (the path reflectance
+  of the TOA LUT is above the dark-water signal in the near infrared): the coupled correction multiplies this path
+  reflectance by T_atm / T_d > 1 in the absorption bands. To be revisited with the aerosol retrieval and the
+  radiometry of the dark-water spectra (research notebook 2).
+
 ## [1.2.0] - 2026-11-12
 
 ### Added

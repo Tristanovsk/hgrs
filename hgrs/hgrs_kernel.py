@@ -242,6 +242,7 @@ from omnicloudmask import predict_from_array
 from . import AuxData
 from .config import behavior
 from .lut_tables import LUTTables
+from .gas_coupling import GasTransmittance
 from .spectral_sensitivity import SuperGaussian
 from .config import (
     AerosolParameters,
@@ -343,6 +344,12 @@ class Product():
         self.psl = 1013
         self.altitude = 0
         self.coef_abs_scat = product_config.gas_absorption_scattering_coefficient
+        # coupling of the gaseous absorption with the scattering (see hgrs.gas_coupling)
+        self.gas_coupling = product_config.gas_coupling
+        self.o2_model = product_config.o2_model
+        self.f_path_raster = None
+        self.f_w_raster = None
+        self.f_path_mean = None
 
         self.raster = l1c_obj.copy()
 
@@ -361,6 +368,10 @@ class Product():
             abs_gas_file=abs_gas_file,
         )
         self.aero_lut = self.lut_tables.aero_lut
+        self.gas_transmittance = GasTransmittance(
+            self.lut_tables.gas_lut, self.coef_abs_scat,
+            coupling=self.gas_coupling, o2_model=self.o2_model,
+        )
         self.water_parameters = WaterParameters(
             mask=product_config,
             vapor=self.config.atmospheric_correction.water_vapor,
@@ -811,8 +822,11 @@ class Algo(Product):
         '''
 
         self.get_gaseous_optical_thickness()
-        Tg = np.exp(- self.air_mass_mean * self.abs_gas_opt_thick)
-
+        if self.o2_model == 'reptran' and self.gas_coupling == 'decoupled':
+            Tg = np.exp(- self.air_mass_mean * self.abs_gas_opt_thick)
+        else:
+            # direct beam with the line-by-line O2 bands (and kappa = 1 in the coupled windows)
+            Tg = self.other_gas_transmittance('dir')
         self.Tg_other = self.sensor_description.convolve(Tg).rename({"wl_sensor": "wl"})
 
         # fwhms = self.raster.fwhm.reset_coords(drop=True).to_dataframe()
@@ -888,6 +902,62 @@ class Algo(Product):
         # conflicts with the retrieved coarse-grid ``tcwv`` output variable.
         if 'tcwv' in self.Twv_raster.coords:
             self.Twv_raster = self.Twv_raster.drop_vars('tcwv')
+
+    def other_gas_transmittance(self, term, aot550=0.1, tcwv=None):
+        r'''
+        Transmittance of the gases other than water vapor for a term of the signal (``'dir'``, ``'atm'`` or
+        ``'w'``, see :py:class:`hgrs.gas_coupling.GasTransmittance`), on the wavelengths of the gaseous LUT.
+
+        :param aot550: aerosol optical thickness at 550 nm (coefficients of the coupling)
+        :param tcwv: water vapor column (kg m-2), for the coefficients; None: 20 kg m-2
+        '''
+        h2o = None if tcwv is None else tcwv / 10.
+        Tg = self.gas_transmittance.other_gases(term, self.air_mass_mean, self.pressure, self.to3c, self.tno2c,
+                                                self.tch4c, aot550=aot550, h2o=h2o)
+        return xr.DataArray(Tg, coords={'wl': self.gas_transmittance.wl}, dims='wl')
+
+    def get_coupling_factors(self, tcwv_raster, aot550):
+        r'''
+        Factors of the coupled gaseous transmittance (``gas_coupling: path_length``), relative to the
+        direct-beam transmittance :math:`T_d = T_{g}\, T_{wv}` used by :py:meth:`other_gas_correction` and
+        :py:meth:`water_vapor_correction`:
+
+        * ``f_path_raster`` :math:`= T_{atm} / T_d`, applied to the path reflectance :math:`R_{diff}`;
+        * ``f_w_raster`` :math:`= T_d / T_{w}`, applied to the water-leaving signal;
+
+        so that :math:`R_{rs} = \left[R_{toa}/T_d - f_{path} R_{diff} - R_{dir}\right] f_w / \pi`, i.e.
+        :math:`R_{toa} = T_{atm} R_{diff} + T_d R_{dir} + T_w \pi R_{rs}`. Rasters (wl, y, x) on the coarse grid
+        of ``tcwv_raster`` (water vapor rounded to 0.1 kg m-2, as :py:meth:`get_wv_transmittance_raster`);
+        ``f_path_mean``: median of ``f_path_raster`` over the scene (wl). None with ``gas_coupling: decoupled``.
+
+        :param tcwv_raster: xarray.Dataset with ``tcwv`` (and ``tcwv_smooth``), see :py:class:`WaterVapor`
+        :param aot550: scene aerosol optical thickness at 550 nm
+        '''
+        if self.gas_coupling == 'decoupled':
+            self.f_path_raster = self.f_w_raster = self.f_path_mean = None
+            return
+        tcwv_source = tcwv_raster.get("tcwv_smooth", tcwv_raster.tcwv)
+        tcwv_vals = tcwv_source.round(1)
+        tcwvs = np.unique(tcwv_vals)
+        tcwvs = tcwvs[~np.isnan(tcwvs)]
+        if tcwvs.size == 0:
+            self.f_path_raster = self.f_w_raster = self.f_path_mean = None
+            return
+        tcwv_scene = float(np.median(tcwvs))
+        convolve = lambda t: self.sensor_description.convolve(t).rename({"wl_sensor": "wl"})
+        gt = self.gas_transmittance
+        T = {}
+        for term in ('dir', 'atm', 'w'):
+            t_other = self.other_gas_transmittance(term, aot550, tcwv_scene)
+            t_wv = gt.water_vapor_table(term, self.air_mass_mean, tcwvs, aot550)
+            T[term] = convolve(t_wv * t_other)
+        f_path = (T['atm'] / T['dir']).transpose('tcwv', 'wl')
+        f_w = (T['dir'] / T['w']).transpose('tcwv', 'wl')
+        self.f_path_raster = f_path.interp(tcwv=tcwv_vals, method='nearest').drop_vars('tcwv').transpose('wl', ...)
+        self.f_w_raster = f_w.interp(tcwv=tcwv_vals, method='nearest').drop_vars('tcwv').transpose('wl', ...)
+        self.f_path_mean = f_path.sel(tcwv=tcwv_scene, method='nearest').drop_vars('tcwv')
+        logger.info('gas coupling: f_path at %s', {int(w): round(float(self.f_path_mean.sel(wl=w, method='nearest')), 3)
+                                                  for w in (687, 720, 762, 820, 940) if self.wl.min() <= w <= self.wl.max()})
 
     def get_full_resolution(self, xarr):
         '''Interpolate ``xarr`` (coarse raster) onto the full resolution grid.'''
@@ -1098,6 +1168,45 @@ def _water_vapor_residuals(x, tcwv_grid, Twv_table, wl, y):
     return Solver.interp_linear(tcwv_grid, Twv_table, tcwv) * (a * wl + b) - y
 
 
+def _water_vapor_residuals_coupled(x, tcwv_grid, Twv_table, Tatm_table, path, wl, y):
+    r'''Residuals of the coupled water vapor model (:py:meth:`WaterVapor.solve` with
+    ``gas_coupling: path_length``): :math:`T_{atm}(W)\, k\, R_p(\lambda) + T_{wv}(W)\,(a\lambda + b) - y`'''
+    tcwv, k, a, b = x
+    return (Solver.interp_linear(tcwv_grid, Tatm_table, tcwv) * k * path
+            + Solver.interp_linear(tcwv_grid, Twv_table, tcwv) * (a * wl + b) - y)
+
+
+def _fit_water_vapor_coupled_block(task):
+    r'''Coupled water vapor fit of the mega-pixels of a block: array (x, y, 6) with
+    :math:`(W, k, b)` and their standard deviations (the slope :math:`a` is not stored)'''
+    spectra, n_water_pixels, fit = task
+    nwl, height, width = spectra.shape
+    result = np.full((width, height, 6), np.nan)
+    for ix in range(width):
+        for iy in range(height):
+            if n_water_pixels is not None and n_water_pixels[iy, ix] < fit['pixel_threshold']:
+                continue
+            y = spectra[:, iy, ix]
+            valid = ~np.isnan(y)
+            if valid.sum() <= 4:
+                continue
+            y = y[valid]
+            res_lsq = least_squares(_water_vapor_residuals_coupled, fit['x0'],
+                                    args=(fit['tcwv_grid'], fit['Twv_table'][:, valid], fit['Tatm_table'][:, valid],
+                                          fit['path'][valid], fit['wl'][valid], y),
+                                    bounds=([0, 0, -10, -1], [60, 5, 1, 1]),
+                                    diff_step=1e-2, xtol=1e-2, ftol=1e-2, max_nfev=40)
+            xres = res_lsq.x
+            resVariance = (res_lsq.fun ** 2).sum() / max(len(res_lsq.fun) - len(res_lsq.x), 1)
+            hess = np.matmul(res_lsq.jac.T, res_lsq.jac)
+            try:
+                std = Solver.errFit(np.linalg.inv(hess), resVariance)
+            except np.linalg.LinAlgError:
+                std = [np.nan] * 4
+            result[ix, iy, :] = [xres[0], xres[1], xres[3], std[0], std[1], std[3]]
+    return result
+
+
 def _fit_water_vapor_block(task):
     r'''Water vapor fit (:py:meth:`WaterVapor.solve`) of the mega-pixels of a block: array (x, y, 6)'''
     spectra, n_water_pixels, fit = task
@@ -1291,6 +1400,28 @@ class WaterVapor(Solver):
         self.tcwv_grid = self.Twv_.tcwv.values
         self.Twv_table = self.Twv_.transpose('tcwv', 'wl').values
 
+        # coupled model (gas_coupling: path_length): transmittance of the path reflectance and shape of
+        # the path reflectance (TOA LUT at the first-guess AOT), see solve
+        self.coupled = getattr(prod, 'gas_coupling', 'decoupled') == 'path_length'
+        if self.coupled:
+            aot550 = prod.aerosol_parameters.aod550_initial
+            Tatm = prod.sensor_description.convolve(
+                prod.gas_transmittance.water_vapor_table('atm', self.air_mass, self.tcwv_grid, aot550)
+            ).rename({"wl_sensor": "wl"}).sel(wl=self.wl.values, method='nearest')
+            self.Tatm_table = Tatm.transpose('tcwv', 'wl').values
+            self.path_reflectance = self.path_reflectance_first_guess(prod, aot550)
+
+    def path_reflectance_first_guess(self, prod, aot550):
+        r'''Path reflectance :math:`R_{diff}(\lambda)` of the TOA LUT (aerosol model of the scene, mean angles) at
+        the first-guess AOT, on the wavelengths of the fit: spectral shape of the path term of the coupled
+        water vapor model'''
+        sza, vza = prod.sza_mean, prod.vza_mean
+        raa_lut = (180 - prod.raa_mean) % 360
+        I = (prod.aero_lut.sel(model=prod.aerosol_parameters.aerosol_model).I
+             .interp(vza=vza, azi=raa_lut, method='linear').interp(sza=sza, method='quadratic').squeeze())
+        R = I.interp(aot_ref=aot550, method='linear').interp(wl=self.wl.values, method='quadratic')
+        return (R / np.cos(np.radians(sza))).values
+
     def interp_tcwv(self, Twv_table, tcwv):
         r'''
         :math:`T_{wv}(\lambda; W)` by linear interpolation in ``tcwv_grid`` (same result as
@@ -1339,10 +1470,21 @@ class WaterVapor(Solver):
             water_pixel_number = None
         # numpy arrays: xarray indexing of each mega-pixel costs more than its fit
         spectra = np.asarray(self.data.transpose('wl', 'y', 'x').values)
-        fit = dict(x0=x0, tcwv_grid=self.tcwv_grid, Twv_table=self.Twv_table, wl=self.wl_mic,
-                   pixel_threshold=self.prod.pixel_threshold)
-        result = self.fit_blocks(_fit_water_vapor_block, spectra, water_pixel_number, fit, 6,
-                                 self.prod.block_size, pool)
+        if self.coupled:
+            # T_atm(W) k R_p + T_wv(W) (a wl + b): first guess W from CAMS, k = 1 (LUT path reflectance), no
+            # surface term
+            cams = getattr(self.prod, 'cams_data', None)
+            w0 = float(cams.tcwv) if cams is not None and 'tcwv' in cams else x0[0]
+            fit = dict(x0=[min(max(w0, 0.5), 59.), 1., 0., 0.], tcwv_grid=self.tcwv_grid, Twv_table=self.Twv_table,
+                       Tatm_table=self.Tatm_table, path=self.path_reflectance, wl=self.wl_mic,
+                       pixel_threshold=self.prod.pixel_threshold)
+            result = self.fit_blocks(_fit_water_vapor_coupled_block, spectra, water_pixel_number, fit, 6,
+                                     self.prod.block_size, pool)
+        else:
+            fit = dict(x0=x0, tcwv_grid=self.tcwv_grid, Twv_table=self.Twv_table, wl=self.wl_mic,
+                       pixel_threshold=self.prod.pixel_threshold)
+            result = self.fit_blocks(_fit_water_vapor_block, spectra, water_pixel_number, fit, 6,
+                                     self.prod.block_size, pool)
         self.result = result
         self.water_vapor = xr.Dataset(dict(tcwv=(["y", "x"], result[:, :, 0].T),
                                            tcwv_std=(["y", "x"], result[:, :, 3].T)),
@@ -1481,6 +1623,11 @@ class Aerosol(Solver):
         self.pixel_threshold = self.prod.pixel_threshold
         self.wl_sunglint = self.prod.water_parameters.wl_sunglint
         self.prepare_lut(self.wl)
+        # coupled gaseous transmittance: the data are divided by the direct-beam transmittance, the path
+        # reflectance of the model is multiplied by f_path = T_atm / T_dir (scene median)
+        f_path = getattr(prod, 'f_path_mean', None)
+        if f_path is not None:
+            self.model.Rdiff_table = self.model.Rdiff_table * f_path.sel(wl=self.wl.values, method='nearest').values
 
     def prepare_lut(self, wl):
         r'''

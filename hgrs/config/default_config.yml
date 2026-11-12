@@ -41,8 +41,15 @@ atmospheric_correction:
     water_pixel_percentage: 20
     block_size: 2                # mega-pixels per side of the blocks processed in parallel
     angle_rounding_digits: 1     # rounding of the angles (fewer LUT interpolations)
-    # factor kappa of CO2, O2 and O4 in the gaseous optical thickness
+    # factor kappa of CO2, O2 and O4 in the gaseous optical thickness (outside the windows of the
+    # coupling with gas_coupling: path_length, where kappa = 1)
     gas_absorption_scattering_coefficient: 0.35
+    # gaseous transmittance of each term of the signal: path_length (photon path-length model of
+    # radcalnet_oc for the path reflectance and the water-leaving signal in the O2 and H2O windows of
+    # 684-990 nm, direct beam for the sun glint) or decoupled (direct beam for the whole signal)
+    gas_coupling: path_length
+    # O2 absorption in the O2-B and O2-A bands: lbl (line by line, HITRAN) or reptran
+    o2_model: lbl
   # transmittance of the final correction: true, computed for the scene-mean AOT;
   # false, for the smoothed AOT of each mega-pixel
   bidirectional_transmittance_global: false
