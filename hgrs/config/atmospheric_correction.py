@@ -52,6 +52,11 @@ class ProductCorrectionConfig:
     o2_model: str = "reptran"
     # table of the coefficients of the photon path-length model (None: the table of the package)
     gas_coupling_table: str | None = None
+    # EnMAP: correction of the radiometric mismatch of the VNIR and SWIR detectors, SWIR - VNIR estimated per
+    # scene over water at 990 nm (detector overlap): 'none', 'swir_ramp' (offset subtracted from the SWIR,
+    # tapered linearly to 0 at 2200 nm) or 'vnir_ramp' (offset added to the VNIR, ramped linearly from 0 at
+    # 700 nm), see hgrs.drivers.enmap.detector_offset
+    enmap_detector_offset: str = "none"
     prisma_land_mask_enabled: bool = True
     prisma_land_valid_classes: tuple[int, ...] = (0, 5, 6)
     prisma_land_forbidden_classes: tuple[int, ...] = (1, 2, 3, 4, 10)
@@ -288,6 +293,7 @@ class AtmosphericCorrectionConfig:
             "gas_coupling": ("product", "gas_coupling"),
             "o2_model": ("product", "o2_model"),
             "gas_coupling_table": ("product", "gas_coupling_table"),
+            "enmap_detector_offset": ("product", "enmap_detector_offset"),
             "aerosol_absorption_scattering_coefficient": (
                 "product", "gas_absorption_scattering_coefficient"
             ),

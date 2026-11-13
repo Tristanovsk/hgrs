@@ -6,6 +6,14 @@ All notable changes to hGRS are listed here, most recent first. The format follo
 
 ## [Unreleased]
 
+### Added
+- EnMAP, experimental: correction of the radiometric mismatch of the VNIR and SWIR detectors over dark water,
+  `product: enmap_detector_offset: none | vnir_ramp | swir_ramp` (`none` by default, products unchanged). The
+  offset SWIR - VNIR is the median over the water pixels of the scene at the VNIR band nearest to 990 nm
+  (detector overlap); `vnir_ramp` adds it to the VNIR, ramped from 0 at 700 nm to 1 at 990 nm, `swir_ramp`
+  subtracts it from the SWIR, tapered to 0 at 2200 nm (`hgrs.drivers.enmap.detector_offset`; attribute
+  `detector_offset_990`). Over dark water the SWIR detector reads 4e-3 to 1.3e-2 more than the VNIR one.
+
 ### Changed
 - Lower memory use, same products (bit for bit): the TOA reflectance cube is read once into a single array, and
   masked (water, clouds, bands of strong gaseous absorption) and corrected for the other gases in place; the

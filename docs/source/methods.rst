@@ -92,6 +92,31 @@ at half maximum :math:`\Gamma_i`:
    X_i = \frac{\int X(\lambda)\, S_i(\lambda)\, d\lambda}{\int S_i(\lambda)\, d\lambda},
    \qquad S_i(\lambda) = \exp\left(-\frac{(\lambda - \lambda_i)^2}{2\sigma_i^2}\right)
 
+EnMAP detector offset
+~~~~~~~~~~~~~~~~~~~~~
+
+The VNIR and SWIR detectors of EnMAP overlap between about 900 and 990 nm. Over dark water, the SWIR detector
+reads 4e-3 to 1.3e-2 more than the VNIR one at the same wavelength (one scene per AERONET-OC site, L1C
+processors V010502 and V010506), while the two agree to a few percent over land: an additive difference at low
+signal, not a gain difference. The setting ``product: enmap_detector_offset`` (experimental, ``none`` by default)
+corrects it (:py:func:`hgrs.drivers.enmap.detector_offset`). The offset
+
+.. math::
+
+   \delta = \operatorname{median}_{water} \left[R_{SWIR}(\lambda_0) - R_{VNIR}(\lambda_0)\right]
+
+is estimated on the water pixels of the scene (:math:`R(1650) < 0.02` and :math:`R(560) > 3 R(1650)`, at least
+1000 pixels), at the VNIR band :math:`\lambda_0` nearest to 990 nm, the SWIR reflectance being interpolated
+linearly to :math:`\lambda_0`. It is applied before the bands of the overlap are removed:
+
+* ``vnir_ramp``: :math:`R_{VNIR}(\lambda) + \delta\, w(\lambda)`, with :math:`w = 0` up to 700 nm, increasing
+  linearly to 1 at :math:`\lambda_0`;
+* ``swir_ramp``: :math:`R_{SWIR}(\lambda) - \delta\, w(\lambda)`, with :math:`w = 1` up to :math:`\lambda_0`,
+  decreasing linearly to 0 at 2200 nm.
+
+The offset is stored in the attribute ``detector_offset_990`` of the Level-1 dataset read by the driver.
+Which detector is biased is not known; this correction is being validated at the AERONET-OC stations.
+
 Water pixels
 ------------
 

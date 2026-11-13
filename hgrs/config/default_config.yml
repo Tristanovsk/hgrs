@@ -54,6 +54,11 @@ atmospheric_correction:
     # table of the coefficients of the photon path-length model (CSV, see hgrs.gas_coupling); null: the table
     # of the package
     gas_coupling_table: null
+    # EnMAP (experimental): correction of the radiometric mismatch of the VNIR and SWIR detectors over dark
+    # water, offset SWIR - VNIR estimated per scene over the water pixels at 990 nm (detector overlap):
+    # none, vnir_ramp (added to the VNIR, ramped linearly from 0 at 700 nm to 1 at 990 nm) or swir_ramp
+    # (subtracted from the SWIR, tapered linearly to 0 at 2200 nm), see hgrs.drivers.enmap.detector_offset
+    enmap_detector_offset: none
   # transmittance of the final correction: true, computed for the scene-mean AOT;
   # false, for the smoothed AOT of each mega-pixel
   bidirectional_transmittance_global: false
