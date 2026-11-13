@@ -17,6 +17,7 @@ from multiprocessing import Pool
 import hgrs
 from hgrs.drivers import get_driver, driver_for_platform
 from hgrs.config import behavior, get_app_config
+from hgrs.hgrs_kernel import set_nan_inplace
 
 opj = os.path.join
 logger = logging.getLogger(__name__)
@@ -321,7 +322,7 @@ class Process():
         prod.apply_water_masks()
         # Evaluate spectral water tests on the original Rtoa values so a cloud
         # classification does not change the independent water-mask meaning.
-        prod.raster['Rtoa'] = prod.raster['Rtoa'].where(omnimask == 0)
+        prod.raster['Rtoa'] = set_nan_inplace(prod.raster['Rtoa'], omnimask != 0)
         # Keep the non-land-masked radiance for full-resolution correction;
         # the land mask is only used to select pixels for retrievals.
         if driver.sensor_description.name == "PRISMA":
@@ -370,9 +371,16 @@ class Process():
         prod.coarse_masked_raster = prod.remove_wl_dataset(
             prod.coarse_masked_raster, prod.wl_to_remove, variable=variable)
 
-        # remove bands where Tg is below a threshold (typically Tg < 0.5)
-        prod.coarse_masked_raster[variable] = prod.coarse_masked_raster[variable].where(Tg_tot > 0.5, drop=True)
-        prod.raster[variable] = prod.raster[variable].where(Tg_tot > 0.5, drop=True)
+        # set to NaN the bands where Tg is below a threshold (typically Tg < 0.5), or not computed, in place:
+        # as `where(Tg_tot > 0.5, drop=True)` assigned back to the dataset (the bands are kept, NaN), without
+        # its copies of the cube
+        for raster in (prod.coarse_masked_raster, prod.raster):
+            data = raster[variable]
+            bad = ~(Tg_tot > 0.5).reindex(wl=data.wl, fill_value=False).values
+            if isinstance(data.data, np.ndarray) and data.dims[0] == 'wl':
+                data.values[bad] = np.nan
+            else:
+                raster[variable] = data.where(~xr.DataArray(bad, coords=dict(wl=data.wl), dims='wl'))
 
         aerosol_state = prod.aerosol_parameters
         self.aerosol_parameters = aerosol_state

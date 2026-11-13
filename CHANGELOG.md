@@ -4,6 +4,14 @@ All notable changes to hGRS are listed here, most recent first. The format follo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/). Dates are those of the commits that set the version.
 
+## [Unreleased]
+
+### Changed
+- Lower memory use, same products (bit for bit): the TOA reflectance cube is read once into a single array, and
+  masked (water, clouds, bands of strong gaseous absorption) and corrected for the other gases in place; the
+  coarse raster is averaged by strips of mega-pixels; GDAL block cache of 256 MB for EnMAP (`GDAL_CACHEMAX`, kept
+  if set). Peak memory for a full EnMAP scene: 14.9 to 10.1 GB.
+
 ## [2.0.0] - 2026-11-13
 
 ### Added

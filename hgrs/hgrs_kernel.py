@@ -220,11 +220,12 @@ algorithm [Harmel2018]_. The optimizations use the trust-region reflective metho
 '''
 
 import os
+import warnings
 
 import numpy as np
 import pandas as pd
 import xarray as xr
-import dask
+import dask.array
 
 from numba import jit
 from scipy import ndimage
@@ -254,6 +255,63 @@ from .config import (
 )
 opj = os.path.join
 logger = logging.getLogger(__name__)
+
+
+def load_into_array(xarr):
+    '''
+    ``xarr`` with its data in memory. A dask array is computed into one preallocated numpy array
+    (:py:func:`dask.array.store`): ``compute`` would hold the chunks and their concatenation at once,
+    twice the memory of the result.
+    '''
+    if isinstance(xarr.data, np.ndarray):
+        return xarr
+    values = np.empty(xarr.shape, dtype=xarr.dtype)
+    dask.array.store(xarr.data, values, lock=False)
+    return xarr.copy(data=values)
+
+
+def set_nan_inplace(xarr, mask):
+    '''
+    Set ``xarr`` (numpy data, ``y`` and ``x`` last dimensions) to NaN where the (y, x) ``mask`` is True, in
+    place, as ``xarr.where(~mask)`` without a copy of the array. Other layouts: ``where``, returned.
+    '''
+    if not (isinstance(xarr.data, np.ndarray) and xarr.dims[-2:] == ('y', 'x')):
+        return xarr.where(~mask)
+    xarr.values[..., np.asarray(mask.transpose('y', 'x').values, dtype=bool)] = np.nan
+    return xarr
+
+
+def coarsen_mean(ds, xcoarsen, ycoarsen):
+    '''
+    ``ds.coarsen(x=xcoarsen, y=ycoarsen, boundary='pad').mean()`` (NaN skipped), computed by strips of
+    ``ycoarsen`` rows for the in-memory variables with ``y`` and ``x`` as last dimensions: the padded
+    reshape of xarray copies a whole cube several times. Same values, same coordinates.
+    '''
+    ny, nx = ds.sizes['y'], ds.sizes['x']
+    nyc, nxc = -(-ny // ycoarsen), -(-nx // xcoarsen)
+    by_strip = [name for name, v in ds.data_vars.items()
+                if isinstance(v.data, np.ndarray) and v.dims[-2:] == ('y', 'x') and v.dtype.kind == 'f']
+    out = ds.drop_vars(by_strip).coarsen(x=xcoarsen, y=ycoarsen, boundary='pad').mean()
+    # coordinates of the mega-pixels, as given by xarray
+    grid = xr.DataArray(np.zeros((ny, nx), np.float32), coords=dict(y=ds.y, x=ds.x), dims=('y', 'x'))
+    grid = grid.coarsen(x=xcoarsen, y=ycoarsen, boundary='pad').mean()
+    for name in by_strip:
+        v = ds[name]
+        values = v.values
+        lead = values.shape[:-2]
+        result = np.empty(lead + (nyc, nxc), dtype=values.dtype)
+        for j in range(nyc):
+            strip = values[..., j * ycoarsen:(j + 1) * ycoarsen, :]
+            pad_y, pad_x = ycoarsen - strip.shape[-2], nxc * xcoarsen - nx
+            if pad_y or pad_x:
+                strip = np.pad(strip, [(0, 0)] * len(lead) + [(0, pad_y), (0, pad_x)], constant_values=np.nan)
+            strip = strip.reshape(lead + (ycoarsen, nxc, xcoarsen))
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', RuntimeWarning)  # mega-pixels without valid pixel
+                result[..., j, :] = np.nanmean(strip, axis=(-3, -1))
+        out[name] = xr.DataArray(result, dims=v.dims, coords={d: v[d] for d in v.dims[:-2] if d in v.coords},
+                                 attrs=v.attrs).assign_coords(y=grid.y, x=grid.x)
+    return out[list(ds.data_vars)]
 
 
 class Product():
@@ -353,6 +411,9 @@ class Product():
         self.f_path_mean = None
 
         self.raster = l1c_obj.copy()
+        # own copy of the data (lazy if dask): Rtoa is then modified in place, which must not change the L1
+        # product of the caller
+        self.raster['Rtoa'] = self.raster.Rtoa.copy(deep=True)
 
         # metadata objects
         self.scene_metadata = (
@@ -488,6 +549,9 @@ class Product():
         Water mask ``water_mask`` from the spectral tests (NDWI, sunglint band level and green-SWIR index,
         thresholds of the configuration), then set ``Rtoa`` to NaN outside the water pixels.
         '''
+        # Rtoa read once into a single array (no concatenation of the chunks), the tests computed on it and
+        # the mask applied in place: one copy of the cube in memory
+        self.raster['Rtoa'] = load_into_array(self.raster.Rtoa)
         green = self.raster.Rtoa.sel(wl=self.water_parameters.wl_green).mean(dim='wl')
         nir = self.raster.Rtoa.sel(wl=self.water_parameters.wl_nir).mean(dim='wl')
         ndwi = (green - nir) / (green + nir)
@@ -501,15 +565,13 @@ class Product():
             & (b2200 < self.water_parameters.mask.sunglint_threshold)
             & (green_swir_index > self.water_parameters.mask.green_swir_index_threshold)
         )
-        # mask and masked Rtoa computed in one pass: the bands of the tests are read once, and the mask
-        # is not left lazy (it would read the image again when the product is written)
-        water_mask, rtoa = dask.compute(water_mask, self.raster.Rtoa.where(water_mask))
+        water_mask = water_mask.compute()
         self.raster['water_mask'] = water_mask.rename('water_mask')
         self.raster['water_mask'].attrs.update(
             long_name='spectral water mask',
             description='True where the pixel passes all configured spectral water tests',
         )
-        self.raster['Rtoa'] = rtoa
+        set_nan_inplace(self.raster.Rtoa, ~water_mask)
 
     def apply_land_mask(self):
         """Mask PRISMA pixels classified as land; leave other sensors unchanged."""
@@ -780,8 +842,7 @@ class Algo(Product):
         are ignored) and count the valid water pixels of each mega-pixel (``water_pixel_number``),
         used to select and weight the mega-pixels in the retrievals.
         '''
-        self.coarse_masked_raster = self.raster[variables].coarsen(x=self.xcoarsen, y=self.ycoarsen,
-                                                                   boundary="pad").mean()
+        self.coarse_masked_raster = coarsen_mean(self.raster[variables], self.xcoarsen, self.ycoarsen)
         self.coarse_masked_raster['water_pixel_number'] = self.raster['Rtoa']. \
             isel(wl=slice(10, 20)).mean(dim='wl'). \
             coarsen(x=self.xcoarsen, y=self.ycoarsen, boundary="pad").count()
@@ -852,7 +913,14 @@ class Algo(Product):
                 return
         if self.Tg_other is None:
             self.get_gaseous_transmittance(self.air_mass_mean)
-        raster[variable] = raster[variable] / self.Tg_other
+        data = raster[variable]
+        if (isinstance(data.data, np.ndarray) and data.dims[0] == 'wl'
+                and np.isin(data.wl.values, self.Tg_other.wl.values).all()):
+            # in place: a new array would double the memory of the full resolution cube
+            tg = self.Tg_other.sel(wl=data.wl.values).values.reshape((-1,) + (1,) * (data.ndim - 1))
+            np.divide(data.values, tg, out=data.values, casting='same_kind')
+        else:
+            raster[variable] = data / self.Tg_other
         raster[variable].attrs['other_gas_correction'] = True
 
     def water_vapor_correction(self,

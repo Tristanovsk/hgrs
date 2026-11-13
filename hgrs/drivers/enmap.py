@@ -110,6 +110,9 @@ class EnmapDriver(L1Driver):
 
         date_str = specific.findtext('datatakeStart').strip().replace("Z", "")
 
+        # GDAL block cache: 5 % of the RAM by default, ~1 GB more resident memory for no gain here (the
+        # image is read once); kept if set by the user
+        os.environ.setdefault('GDAL_CACHEMAX', '256')
         # open raster: the GeoTIFF is band interleaved, in strips of full rows, so one chunk per 8 bands
         # on the whole image; lock=False decompresses the chunks in parallel (one file handle per thread)
         data = rxr.open_rasterio(l1c_raster_path, chunks={'x': -1, 'y': -1, 'band': 8}, lock=False,
