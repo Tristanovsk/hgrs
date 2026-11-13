@@ -149,6 +149,22 @@ that is, the water-leaving reflectance must stay non-negative in the visible and
 :math:`\Lambda_+`. :math:`\tau_{ref}` is bounded by the CAMS values (see
 :py:meth:`hgrs.hgrs_process.Process.execute`) and :math:`B \in [0, 1.3]`.
 
+Over very dark water the constraint can be infeasible for every :math:`\tau_{ref}` (e.g. EnMAP, whose VNIR
+reflectance can fall below the Rayleigh reflectance in the near infrared): the fit then ends at the lower
+bound of :math:`\tau_{ref}`. The settings ``aerosol: prior`` and ``nonnegativity`` (experimental, off by
+default) replace the fit by the minimization of (:py:meth:`AerosolModel.cost_regularized`)
+
+.. math::
+
+   J = \sum_{\lambda \in \Lambda_a} \left[\frac{R - R_{sim}}{\sigma_R}\right]^2
+     + \left[\frac{\tau_{ref} - \bar\tau_{CAMS}}{\sigma_{CAMS}}\right]^2
+     + \sum_{\lambda \in \Lambda_+} \left[\frac{\min(0,\, R - R_{sim})}{\sigma_+}\right]^2
+
+with the CAMS prior (``prior: cams``, :math:`\sigma_{CAMS}` as for the bounds) and the non-negativity as a
+one-sided penalty (``nonnegativity: soft``, :math:`\sigma_+` = ``nonnegativity_sigma``) instead of the hard
+constraint; :math:`\sigma_R` = ``reflectance_sigma``. A prior alone has no effect where the hard constraint is
+infeasible. With ``nonnegativity: soft`` the retrieved :math:`R_{rs}` can be negative in :math:`\Lambda_+`.
+
 Remote-sensing reflectance
 --------------------------
 
@@ -1347,12 +1363,19 @@ def _fit_aerosol_block(task):
                 idx_atmo = _nearest_bands(wl, valid, fit['wl_atmo'])
                 idx_non_neg = _nearest_bands(wl, valid, fit['wl_non_neg'])
 
+            reg = fit.get('regularization')
+            hard = reg is None or reg['sigma_nn'] is None
             cons = ({'type': 'ineq',
                      'fun': model.constraint,
                      'args': (idx_non_neg, yfull[idx_non_neg])
-                     })
-            min_res = minimize(model.cost, x0,
-                               args=(idx_atmo, yfull[idx_atmo]),
+                     },) if hard else ()
+            if reg is None:
+                cost, args = model.cost, (idx_atmo, yfull[idx_atmo])
+            else:
+                cost = model.cost_regularized
+                args = (idx_atmo, yfull[idx_atmo], idx_non_neg, yfull[idx_non_neg], reg)
+            min_res = minimize(cost, x0,
+                               args=args,
                                method='SLSQP',
                                bounds=fit['bounds'],
                                constraints=cons, options=fit['options']
@@ -1407,6 +1430,30 @@ class AerosolModel():
     def constraint(self, x, idx, y):
         r''':py:meth:`Aerosol.constraint` with :py:meth:`residuals`'''
         return np.min(self.residuals(x, idx, y))
+
+    def cost_regularized(self, x, idx, y, idx_nn, y_nn, reg):
+        r'''
+        Regularized cost (settings ``aerosol: prior``, ``nonnegativity``):
+
+        .. math::
+
+           J = \sum_{\lambda \in \Lambda_a} \left[\frac{R - R_{sim}}{\sigma_R}\right]^2
+             + \left[\frac{\tau_{ref} - \bar\tau_{CAMS}}{\sigma_{CAMS}}\right]^2
+             + \sum_{\lambda \in \Lambda_+} \left[\frac{\min(0,\, R - R_{sim})}{\sigma_+}\right]^2
+
+        the second term with ``prior: cams``, the third with ``nonnegativity: soft`` (otherwise the
+        non-negativity stays a hard constraint of the fit).
+
+        :param reg: dict ``sigma`` (:math:`\sigma_R`), ``prior`` (None or (mean, sigma)), ``sigma_nn`` (None or
+            :math:`\sigma_+`)
+        '''
+        j = np.sum((self.residuals(x, idx, y) / reg['sigma']) ** 2)
+        if reg['prior'] is not None:
+            mean, sigma = reg['prior']
+            j += ((x[0] - mean) / sigma) ** 2
+        if reg['sigma_nn'] is not None:
+            j += np.sum((np.minimum(self.residuals(x, idx_nn, y_nn), 0) / reg['sigma_nn']) ** 2)
+        return j
 
 
 class WaterVapor(Solver):
@@ -1822,6 +1869,19 @@ class Aerosol(Solver):
         r'''Non-negativity constraint :math:`\min_\lambda \left[R(\lambda) - R_{sim}(\lambda)\right] \geq 0`'''
         return np.min((self.func(x, aot, rot, Rtoa_lut, sunglint_eps, y)))
 
+    def regularization(self):
+        r'''
+        Settings of :py:meth:`AerosolModel.cost_regularized`, or None for the unregularized fit (defaults
+        ``aerosol: prior: none``, ``nonnegativity: hard``). The prior is the CAMS AOD(550) of the scene with
+        :math:`\sigma_{CAMS} = \max(s_{CAMS},\ 0.2\,\bar\tau_{CAMS} + 0.05)`, as for the bounds of the fit.
+        '''
+        state = self.aerosol_state
+        if not state.regularized:
+            return None
+        return dict(sigma=state.reflectance_sigma,
+                    prior=(state.aod550_initial, state.aod550_prior_std) if state.prior == 'cams' else None,
+                    sigma_nn=state.nonnegativity_sigma if state.nonnegativity == 'soft' else None)
+
     def solve(self, x0=[0.005, 0.], pool=None):
         r'''
         Retrieve :math:`(\tau_{ref}, B)` on every mega-pixel with enough water pixels
@@ -1860,7 +1920,7 @@ class Aerosol(Solver):
                    wl_atmo=self.wl_atmo, wl_non_neg=self.wl_non_neg,
                    bounds=((self.aod550_min, self.aod550_max), (0, 1.3)),
                    options=self._optimizer_options(), warm_start=self.aerosol_state.solver_warm_start,
-                   pixel_threshold=self.pixel_threshold)
+                   pixel_threshold=self.pixel_threshold, regularization=self.regularization())
         result = self.fit_blocks(_fit_aerosol_block, spectra, n_water_pixels, fit, 4, self.block_size, pool)
 
         self.aero_img = xr.Dataset(

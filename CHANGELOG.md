@@ -13,6 +13,14 @@ All notable changes to hGRS are listed here, most recent first. The format follo
   (detector overlap); `vnir_ramp` adds it to the VNIR, ramped from 0 at 700 nm to 1 at 990 nm, `swir_ramp`
   subtracts it from the SWIR, tapered to 0 at 2200 nm (`hgrs.drivers.enmap.detector_offset`; attribute
   `detector_offset_990`). Over dark water the SWIR detector reads 4e-3 to 1.3e-2 more than the VNIR one.
+- Aerosol retrieval, experimental: `aerosol: prior: none | cams` (Tikhonov term towards the CAMS AOD(550), with
+  the sigma of the bounds of the fit), `nonnegativity: hard | soft` (non-negativity of the water reflectance as
+  the constraint of the fit, or as a one-sided quadratic penalty of scale `nonnegativity_sigma`) and
+  `reflectance_sigma` (weight of the data term); `AerosolModel.cost_regularized`. The defaults (`none`, `hard`)
+  give the 2.0.0 fit. Over dark water, where the non-negativity of the EnMAP VNIR bands cannot be met and the
+  AOT ends at its lower bound, a soft non-negativity lets the SWIR bands and CAMS set the AOT (Lucinda scene:
+  98 % of the mega-pixels at the bound with the 2.0.0 fit, 4 % with `soft`, `nonnegativity_sigma: 2e-3` and the
+  CAMS prior).
 
 ### Changed
 - Lower memory use, same products (bit for bit): the TOA reflectance cube is read once into a single array, and

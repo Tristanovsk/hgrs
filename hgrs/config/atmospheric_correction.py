@@ -6,6 +6,9 @@ from typing import Any, Mapping
 import numpy as np
 import xarray as xr
 
+AEROSOL_PRIORS = ("none", "cams")
+NONNEGATIVITY_MODES = ("hard", "soft")
+
 
 def _dataclass_values(config, cls, tuple_fields=(), range_fields=()):
     known = {item.name for item in fields(cls)}
@@ -143,6 +146,23 @@ class AerosolCorrectionConfig:
     solver_max_iterations: int = 10
     solver_ftol: float | None = None
     solver_warm_start: bool = True
+    # prior of the AOT (Tikhonov term ((tau - tau_CAMS) / sigma_CAMS)^2 in the cost): 'none' or 'cams'
+    prior: str = "none"
+    # uncertainty of the fitted TOA reflectance, weight of the data term against the prior and the penalty
+    reflectance_sigma: float = 1e-3
+    # non-negativity of the water reflectance: 'hard' (SLSQP constraint) or 'soft' (one-sided quadratic
+    # penalty sum(min(0, R - R_sim)^2) / nonnegativity_sigma^2 in the cost)
+    nonnegativity: str = "hard"
+    nonnegativity_sigma: float = 1e-3
+
+    def __post_init__(self):
+        if self.prior not in AEROSOL_PRIORS:
+            raise ValueError(f"aerosol: prior must be one of {AEROSOL_PRIORS}, not {self.prior!r}")
+        if self.nonnegativity not in NONNEGATIVITY_MODES:
+            raise ValueError(
+                f"aerosol: nonnegativity must be one of {NONNEGATIVITY_MODES}, not {self.nonnegativity!r}")
+        if self.reflectance_sigma <= 0 or self.nonnegativity_sigma <= 0:
+            raise ValueError("aerosol: reflectance_sigma and nonnegativity_sigma must be positive")
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "AerosolCorrectionConfig":
@@ -176,6 +196,16 @@ class AerosolParameters:
     smoothing_method: str = "weighted_local"
     smoothing_window: tuple[int, int] = (1, 1)
     smoothing_footprint: tuple[int, int] = (3, 3)
+    aod550_prior_std: float = float("nan")
+    prior: str = "none"
+    reflectance_sigma: float = 1e-3
+    nonnegativity: str = "hard"
+    nonnegativity_sigma: float = 1e-3
+
+    @property
+    def regularized(self) -> bool:
+        """True when the cost has a prior or a soft non-negativity term (else the 1.x/2.0 fit)."""
+        return self.prior != "none" or self.nonnegativity != "hard"
 
     @property
     def aod550_bounds(self) -> tuple[float, float]:
@@ -223,6 +253,11 @@ class AerosolParameters:
             smoothing_method=config.smoothing_method,
             smoothing_window=config.smoothing_window,
             smoothing_footprint=config.smoothing_footprint,
+            aod550_prior_std=float(prior_std),
+            prior=config.prior,
+            reflectance_sigma=config.reflectance_sigma,
+            nonnegativity=config.nonnegativity,
+            nonnegativity_sigma=config.nonnegativity_sigma,
         )
 
 

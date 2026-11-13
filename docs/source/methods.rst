@@ -273,6 +273,27 @@ The bounds are :math:`B \in [0, 1.3]` and
 with :math:`s_{CAMS}` the standard deviation of the CAMS AOD; the first guess is
 :math:`(\bar\tau_{CAMS}(550), 0)`.
 
+**Regularized fit (experimental).** Over very dark water the constraint can be infeasible for every
+:math:`\tau_{ref}`: with EnMAP, the VNIR reflectance of dark water can fall below the Rayleigh reflectance in
+the near infrared (see `EnMAP detector offset`_), and the fit then ends at the lower bound of
+:math:`\tau_{ref}`. A prior on :math:`\tau_{ref}` alone cannot change this, since a hard constraint prevails
+over the cost. The settings ``aerosol: prior: cams`` and ``nonnegativity: soft`` (off by default) replace the
+fit by
+
+.. math::
+
+   (\hat\tau_{ref}, \hat B) = \underset{\tau_{ref},\, B}{\operatorname{argmin}}
+   \sum_{\lambda \in \Lambda_a} \left[\frac{R - R_{sim}}{\sigma_R}\right]^2
+   + \left[\frac{\tau_{ref} - \bar\tau_{CAMS}(550)}{\sigma_{CAMS}}\right]^2
+   + \sum_{\lambda \in \Lambda_+} \left[\frac{\min(0,\, R - R_{sim})}{\sigma_+}\right]^2
+
+within the same bounds, with :math:`\sigma_{CAMS} = \max(s_{CAMS},\ 0.2\,\bar\tau_{CAMS}(550) + 0.05)`,
+:math:`\sigma_R` = ``reflectance_sigma`` and :math:`\sigma_+` = ``nonnegativity_sigma`` (each term is used only
+with its setting). :math:`\sigma_+` sets how far the water reflectance may go below zero in :math:`\Lambda_+`,
+that is, how much the visible-NIR bands are trusted against the SWIR bands and CAMS; the retrieved
+:math:`R_{rs}` can then be negative in these bands. These settings are being validated at the AERONET-OC
+stations.
+
 The retrieved :math:`\tau_{ref}` is smoothed with a weighted moving average (weights: number of water
 pixels of the mega-pixels)
 

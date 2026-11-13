@@ -90,3 +90,11 @@ atmospheric_correction:
     solver_max_iterations: 20
     solver_ftol: 1.0e-10
     solver_warm_start: false
+    # regularization of the fit (experimental): prior of the AOT, none or cams (Tikhonov term
+    # ((tau - tau_CAMS) / sigma_CAMS)^2, sigma_CAMS = max(std, 0.2 tau_CAMS + 0.05)); non-negativity of the
+    # water reflectance, hard (constraint) or soft (one-sided penalty of scale nonnegativity_sigma);
+    # reflectance_sigma weights the data term. prior: none and nonnegativity: hard give the 2.0.0 fit.
+    prior: none
+    reflectance_sigma: 1.0e-3
+    nonnegativity: hard
+    nonnegativity_sigma: 1.0e-3
