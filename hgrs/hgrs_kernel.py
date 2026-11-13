@@ -411,9 +411,11 @@ class Product():
         self.f_path_mean = None
 
         self.raster = l1c_obj.copy()
-        # own copy of the data (lazy if dask): Rtoa is then modified in place, which must not change the L1
-        # product of the caller
-        self.raster['Rtoa'] = self.raster.Rtoa.copy(deep=True)
+        # TOA reflectance in float32 (half the memory of the cubes; Rrs is written in float32), float64 with
+        # the former behavior. Own copy of the data (lazy if dask): Rtoa is then modified in place, which
+        # must not change the L1 product of the caller.
+        dtype = self.raster.Rtoa.dtype if behavior.PREVIOUS_BEHAVIOR else np.float32
+        self.raster['Rtoa'] = self.raster.Rtoa.astype(dtype, copy=True)
 
         # metadata objects
         self.scene_metadata = (

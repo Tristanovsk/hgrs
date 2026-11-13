@@ -11,6 +11,10 @@ All notable changes to hGRS are listed here, most recent first. The format follo
   masked (water, clouds, bands of strong gaseous absorption) and corrected for the other gases in place; the
   coarse raster is averaged by strips of mega-pixels; GDAL block cache of 256 MB for EnMAP (`GDAL_CACHEMAX`, kept
   if set). Peak memory for a full EnMAP scene: 14.9 to 10.1 GB.
+- TOA reflectance `Rtoa` processed in float32 (float64 with `previous_behavior`): peak memory for a full EnMAP
+  scene 10.1 to 8.0 GB. The products change at the float32 rounding level only: `Rrs` by 1.5e-8 at most (median
+  relative difference 1.2e-7), `aot_ref` by 6e-7, `tcwv` by 6e-4 kg m-2 for 99 % of the mega-pixels (0.015 at
+  most); masks unchanged.
 
 ## [2.0.0] - 2026-11-13
 
