@@ -6,9 +6,10 @@ Usage::
 
     python coupling_products.py SCENE DECOUPLED.nc COUPLED.nc [SCENE DECOUPLED.nc COUPLED.nc ...]
 
-The products are made with ``hgrs_enmap`` (or another command) with the user settings
-``atmospheric_correction: product: {gas_coupling: decoupled, o2_model: reptran}`` for the first one and the
-default settings (``path_length``, ``lbl``) for the second one.
+The products are made with ``hgrs_enmap`` (or another command), with a configuration file (``HGRS_CONFIG``) holding
+only the LUT folder, so that no other user setting is mixed in: plus ``previous_behavior: true`` (decoupled, REPTRAN,
+water vapor fit 800-1300 nm, i.e. hGRS 1.2.0) for the first one, the default settings of hGRS 2.0.0
+(``path_length``, ``lbl_o2b``, 931-1060 nm) for the second one.
 '''
 import sys
 from pathlib import Path

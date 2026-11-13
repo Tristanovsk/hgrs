@@ -41,16 +41,17 @@ All notable changes to hGRS are listed here, most recent first. The format follo
   unchanged elsewhere. In the coupled windows the factor `gas_absorption_scattering_coefficient` of O2, O4 and CO2
   is 1. `previous_behavior: true` (`gas_coupling: decoupled`, `o2_model: reptran`, 800-1300 nm) gives the results
   of 1.2.0.
-- **To rerun with 2.0.0** (figures obtained before the switch to `lbl_o2b`, the 931-1060 nm range and the coupling of
-  all the gases together): on two dark-water EnMAP scenes (Lucinda 2026-05-31, Brasil 2024-06-12), median residual
-  band depth of Rrs (sr-1), decoupled -> coupled: 686 nm +3.0e-4 -> +2e-5 and +3.3e-4 -> +2e-5, 941 nm
-  +6.7e-4 -> +4.7e-4 and +8.2e-4 -> +4.8e-4, but 720, 764 and 817 nm more negative (e.g. 764 nm -4.5e-5 -> -5.6e-4
-  and -2.9e-4 -> -7.7e-4); TCWV 0.98 -> 1.06 and 2.58 -> 3.13 kg m-2 (CAMS 11.0 and 14.1); median Rrs outside the
-  coupled windows within 1e-5; products of `previous_behavior` identical to 1.2.0 on the Lucinda scene. On both
-  scenes the AOT of the retrieval is at its lower bound (the path reflectance of the TOA LUT is above the dark-water
-  signal in the near infrared): the coupled correction multiplies this path reflectance by T_atm / T_d > 1 in the
-  absorption bands. To be revisited with the aerosol retrieval and the radiometry of the dark-water spectra
-  (research notebook 2).
+- On two dark-water EnMAP scenes (Lucinda 2026-05-31, Brasil 2024-06-12 tile 001), `previous_behavior` (1.2.0) ->
+  2.0.0 defaults: TCWV 1.0 -> 12.2 and 2.7 -> 17.9 kg m-2 (CAMS 11.0 and 14.1); median residual band depth of Rrs
+  (sr-1): 764 nm -5.0e-4 -> -5e-5 and -8.8e-4 -> -9e-5, 720 nm -4.0e-4 -> -1.2e-4 and -6.2e-4 -> -2e-5, 817 nm
+  -1.1e-4 -> +1.0e-4 and -2.1e-4 -> +3.0e-4, 686 nm +8e-5 -> -1.0e-4 and +7e-5 -> -1.4e-4; the 941 nm band is
+  dropped (gaseous transmittance below 0.5 with the retrieved column); median Rrs at 443, 560, 665 and 865 nm within
+  7e-5. On both scenes the AOT of the retrieval stays at its lower bound, with and without the coupling: over dark
+  water the TOA reflectance of the EnMAP VNIR detector beyond ~720 nm is below the Rayleigh path reflectance (by
+  up to 3.5e-3 at 890 nm), which the non-negativity constraint of the aerosol fit (750, 800, 865 nm) cannot
+  accommodate. In the VNIR/SWIR overlap (975-990 nm) the SWIR detector reads 3e-3 to 1e-2 more than the VNIR one
+  over dark water at the same wavelength, on all the 17 scenes checked (L1C V010502 and V010506), while the two
+  agree to a few percent over land.
 
 ## [1.2.0] - 2026-11-12
 
