@@ -11,7 +11,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from common import OUT_DIR, enmap_scenes, aeronet_sites, inside, read_aeronet_oc, cams_file
+from common import OUT_DIR, enmap_scenes, aeronet_sites, aeronet_times, inside, cams_file
 
 warnings.filterwarnings('ignore')
 MAX_LAG = pd.Timedelta(hours=float(sys.argv[1]) if len(sys.argv) > 1 else 3)
@@ -35,11 +35,7 @@ def main():
                 if not f:
                     continue
                 if f not in cache:
-                    try:
-                        cache[f] = read_aeronet_oc(f).index
-                    except Exception as e:  # unreadable file
-                        print('cannot read', f, e)
-                        cache[f] = pd.DatetimeIndex([])
+                    cache[f] = aeronet_times(st.site, level)
                 times = cache[f]
                 if len(times) == 0:
                     continue

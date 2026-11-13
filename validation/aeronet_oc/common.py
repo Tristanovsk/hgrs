@@ -4,7 +4,8 @@ Common settings and readers of the AERONET-OC validation of hGRS (EnMAP).
 Paths (environment variables override the defaults):
 
 * ``HGRS_VAL_ENMAP``: EnMAP L1C products, one folder per site or delivery (searched recursively);
-* ``HGRS_VAL_AERONET``: AERONET-OC version 3 files (``<site>_OCv3.lev20`` and ``.lev15``);
+* ``HGRS_VAL_AERONET``: root of the AERONET-OC version 3 database (``aeronet_oc_db``: raw files
+  ``<site>_OCv3.lev20|lev15`` and the products in ``db/``, updated with ``aeronet-oc-db update``);
 * ``HGRS_VAL_CAMS``: CAMS files, ``cams_forecast_YYYY-MM.nc`` or ``YYYY/MM/DD/YYYY-MM-DD-*.nc``;
 * ``HGRS_VAL_OUT``: output folder of the validation (matchup tables, simulations, L2A products).
 '''
@@ -69,43 +70,31 @@ def inside(lon, lat, polygon):
 # ------------------------------------------------------------------------------------------------
 # AERONET-OC
 # ------------------------------------------------------------------------------------------------
-def read_aeronet_oc(site_file):
-    '''AERONET-OC v3 file -> DataFrame (radcalnet_oc reader), time index in UTC, columns
-    (field, type, wavelength)'''
-    import radcalnet_oc.aeronet_oc as ao
-    return ao.Aeronet().read_aeronet_ocv3(str(site_file))
+def aeronet_db(root=AERONET_DIR):
+    '''AERONET-OC database (:class:`aeronet_oc_db.Database`)'''
+    from aeronet_oc_db import Database
+    return Database(root)
+
+
+def aeronet_times(site, level, root=AERONET_DIR):
+    '''times (UTC) of the records of a site'''
+    with aeronet_db(root).open(site, level) as ds:
+        return pd.DatetimeIndex(ds.time.values)
 
 
 def aeronet_sites(root=AERONET_DIR):
-    '''Sites of the AERONET-OC files: name, longitude, latitude, files of level 2.0 and 1.5'''
-    rows = {}
-    for f in sorted(glob.glob(str(root / '*_OCv3.lev*'))):
-        site, level = re.match(r'(.*)_OCv3\.(lev\d\d)$', os.path.basename(f)).groups()
-        rows.setdefault(site, {})[level] = f
+    '''Sites of the AERONET-OC database: name, longitude, latitude and, for the levels 2.0 and 1.5, the
+    netCDF file of the site (``None`` if the site has no data at that level)'''
+    db = aeronet_db(root)
+    cat = db.catalog
+    if cat.empty:
+        raise FileNotFoundError(f'empty AERONET-OC catalog in {db.dir}: run "aeronet-oc-db build"')
     out = []
-    for site, files in rows.items():
-        lon = lat = np.nan
-        lines = []
-        for level in ('lev20', 'lev15'):          # first file with data (some files are empty)
-            if files.get(level):
-                with open(files[level], encoding='latin_1') as fh:
-                    lines = fh.readlines()
-                if len(lines) > 8:
-                    break
-                files[level] = None
-        if len(lines) <= 8:
-            continue
-        header = lines[7].strip().split(',')
-        try:
-            ilat, ilon = header.index('Site_Latitude(Degrees)'), header.index('Site_Longitude(Degrees)')
-            for line in lines[8:]:
-                v = line.strip().split(',')
-                if len(v) > max(ilat, ilon):
-                    lat, lon = float(v[ilat]), float(v[ilon])
-                    break
-        except ValueError:
-            pass
-        out.append(dict(site=site, lon=lon, lat=lat, lev20=files.get('lev20'), lev15=files.get('lev15')))
+    for site, g in cat.groupby('site', sort=False):
+        levels = set(g.level)
+        out.append(dict(site=site, lon=float(g.longitude.iloc[0]), lat=float(g.latitude.iloc[0]),
+                        **{lev: str(db.netcdf_path(site, lev)) if lev in levels else None
+                           for lev in ('lev20', 'lev15')}))
     return pd.DataFrame(out)
 
 
