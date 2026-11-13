@@ -48,13 +48,19 @@ atmospheric_correction:
     # radcalnet_oc for the path reflectance and the water-leaving signal in the O2 and H2O windows of
     # 684-990 nm, direct beam for the sun glint) or decoupled (direct beam for the whole signal)
     gas_coupling: path_length
-    # O2 absorption in the O2-B and O2-A bands: lbl (line by line, HITRAN) or reptran
-    o2_model: lbl
+    # O2 absorption in the O2-B and O2-A bands: lbl_o2b (line by line in the O2-B band, REPTRAN in the
+    # O2-A band), lbl (line by line in both) or reptran (see hgrs.gas_coupling.GasTransmittance)
+    o2_model: lbl_o2b
+    # table of the coefficients of the photon path-length model (CSV, see hgrs.gas_coupling); null: the table
+    # of the package
+    gas_coupling_table: null
   # transmittance of the final correction: true, computed for the scene-mean AOT;
   # false, for the smoothed AOT of each mega-pixel
   bidirectional_transmittance_global: false
   water_vapor:
-    wavelengths_nm: [800, 1300]  # fitting range of the water vapor retrieval
+    # fitting range of the water vapor retrieval: SWIR detector of EnMAP only (the VNIR and SWIR detectors
+    # disagree around 900 nm, which biases a fit across them), 940 nm band (long-wave half) and its continuum
+    wavelengths_nm: [931, 1060]
     # first guess of the water vapor column W (kg m-2) and of the coefficients a, b of the
     # background reflectance a * wl + b (wl in micron), fitted as Twv(W) * (a * wl + b)
     first_guess: [2, -0.04, 0.1]

@@ -37,7 +37,7 @@ Notation
      - sunglint amplitude, i.e. the sunglint reflectance normalized by its spectral shape
        (``brdfg``)
    * - :math:`\Lambda_{wv},\ \Lambda_g,\ \Lambda_a,\ \Lambda_+`
-     - wavelength sets used for water vapor (800-1300 nm, ``wl_water_vapor``), sunglint
+     - wavelength sets used for water vapor (931-1060 nm, ``wl_water_vapor``), sunglint
        (2150-2250 nm, ``wl_sunglint``), aerosol fit (``wl_atmo``) and non-negativity constraint
        (``wl_non_neg``)
 
@@ -347,6 +347,7 @@ class Product():
         # coupling of the gaseous absorption with the scattering (see hgrs.gas_coupling)
         self.gas_coupling = product_config.gas_coupling
         self.o2_model = product_config.o2_model
+        self.gas_coupling_table = getattr(product_config, 'gas_coupling_table', None)
         self.f_path_raster = None
         self.f_w_raster = None
         self.f_path_mean = None
@@ -370,7 +371,7 @@ class Product():
         self.aero_lut = self.lut_tables.aero_lut
         self.gas_transmittance = GasTransmittance(
             self.lut_tables.gas_lut, self.coef_abs_scat,
-            coupling=self.gas_coupling, o2_model=self.o2_model,
+            coupling=self.gas_coupling, o2_model=self.o2_model, ppld_file=self.gas_coupling_table,
         )
         self.water_parameters = WaterParameters(
             mask=product_config,
@@ -948,9 +949,10 @@ class Algo(Product):
         gt = self.gas_transmittance
         T = {}
         for term in ('dir', 'atm', 'w'):
-            t_other = self.other_gas_transmittance(term, aot550, tcwv_scene)
-            t_wv = gt.water_vapor_table(term, self.air_mass_mean, tcwvs, aot550)
-            T[term] = convolve(t_wv * t_other)
+            # all the gases together: the coupled transmittance of a channel is not the product of those of
+            # its gases
+            T[term] = convolve(gt.total_table(term, self.air_mass_mean, self.pressure, self.to3c, self.tno2c,
+                                              self.tch4c, tcwvs, aot550))
         f_path = (T['atm'] / T['dir']).transpose('tcwv', 'wl')
         f_w = (T['dir'] / T['w']).transpose('tcwv', 'wl')
         self.f_path_raster = f_path.interp(tcwv=tcwv_vals, method='nearest').drop_vars('tcwv').transpose('wl', ...)
@@ -1341,15 +1343,29 @@ class WaterVapor(Solver):
     r'''
     Retrieval of the total column water vapor :math:`W` on the coarse raster.
 
-    In each mega-pixel, the reflectance over ``prod.wl_water_vapor`` (800-1300 nm) is fitted with
+    In each mega-pixel, the reflectance over ``prod.wl_water_vapor`` (``water_vapor: wavelengths_nm``, 931-1060 nm by
+    default, 800-1300 nm with the former behavior), divided by the direct-beam transmittance of the other gases, is
+    fitted by non-linear least squares (:py:func:`scipy.optimize.least_squares`, :math:`\lambda` in µm):
 
-    .. math::
+    * ``gas_coupling: path_length``: path reflectance and surface term with their own transmittances,
 
-       R(\lambda) \simeq T_{wv}(\lambda; W, \bar M)\, (a\lambda + b)
+      .. math::
 
-    by non-linear least squares (:py:func:`scipy.optimize.least_squares`), with
-    :math:`(W, a, b) \in [0, 60] \times [-10, 1] \times [0, 1]` (:math:`\lambda` in µm). The
-    uncertainty ``tcwv_std`` is given by :py:meth:`Solver.errFit`.
+         R(\lambda) \simeq \frac{T_{atm}(\lambda; W)}{T_{g}(\lambda)}\, k\, R_{path}(\lambda)
+         + T_{wv}(\lambda; W, \bar M)\, (a\lambda + b)
+
+      with :math:`R_{path}` the path reflectance of the TOA LUT at the first-guess AOT
+      (:py:meth:`path_reflectance_first_guess`), :math:`T_{atm}` the coupled transmittance of all the gases
+      (:py:class:`hgrs.gas_coupling.GasTransmittance`), :math:`(W, k, a, b) \in [0, 60] \times [0, 5] \times
+      [-10, 1] \times [-1, 1]` and the first guess of :math:`W` from CAMS;
+    * ``gas_coupling: decoupled``: :math:`R(\lambda) \simeq T_{wv}(\lambda; W, \bar M)\, (a\lambda + b)`, with
+      :math:`(W, a, b) \in [0, 60] \times [-10, 1] \times [0, 1]`.
+
+    Over dark water the path reflectance dominates and its absorption bands are shallower than those of the
+    direct beam: the decoupled model underestimates :math:`W` (by a factor 3 to 5 at the AERONET-OC stations, with
+    EnMAP), the coupled one recovers it. The default range keeps to one detector of EnMAP: the VNIR and SWIR
+    reflectances disagree around 900 nm by up to 50 %, which biases a fit across them. The uncertainty
+    ``tcwv_std`` is given by :py:meth:`Solver.errFit`.
 
     :param prod: :py:class:`Algo` object, corrected for the other gases
     :param raster_name: name of the raster attribute of ``prod`` to process
@@ -1405,9 +1421,14 @@ class WaterVapor(Solver):
         self.coupled = getattr(prod, 'gas_coupling', 'decoupled') == 'path_length'
         if self.coupled:
             aot550 = prod.aerosol_parameters.aod550_initial
+            # the data are divided by the direct-beam transmittance of the other gases (Tg_other): the path
+            # term is T_atm(W) / Tg_other, with T_atm the coupled transmittance of all the gases
+            gt = prod.gas_transmittance
             Tatm = prod.sensor_description.convolve(
-                prod.gas_transmittance.water_vapor_table('atm', self.air_mass, self.tcwv_grid, aot550)
+                gt.total_table('atm', self.air_mass, prod.pressure, prod.to3c, prod.tno2c, prod.tch4c,
+                               self.tcwv_grid, aot550)
             ).rename({"wl_sensor": "wl"}).sel(wl=self.wl.values, method='nearest')
+            Tatm = Tatm / prod.Tg_other.sel(wl=Tatm.wl.values, method='nearest').assign_coords(wl=Tatm.wl.values)
             self.Tatm_table = Tatm.transpose('tcwv', 'wl').values
             self.path_reflectance = self.path_reflectance_first_guess(prod, aot550)
 

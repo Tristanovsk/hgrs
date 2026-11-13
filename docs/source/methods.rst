@@ -147,25 +147,29 @@ and the water-leaving signal (:math:`T_w`):
 channel by channel, :math:`\tau` the vertical optical thickness of the channel, :math:`\eta` the ratio of the
 mean absorber path to the geometric one and :math:`s^2` the relative variance of the paths (Gamma distribution),
 both linear in :math:`\bar M - 2`, :math:`\tau_{550} - 0.1` and :math:`\ln(W/20\,\mathrm{kg\,m^{-2}})`, fitted
-on SOS-ABS coupled simulations. O3, NO2 and CH4 keep the direct-beam air mass, and :math:`\kappa` = 1 in the
-windows. The correction becomes
+on SOS-ABS coupled simulations. In the windows, :math:`\tau` is the total absorption optical thickness of the
+channel (all the gases together, as in the fit: the coupled transmittance of a channel is not the product of those
+of its gases) and :math:`\kappa` = 1; outside the windows, all the gases keep the direct-beam air mass. The table of
+the coefficients can be replaced (``gas_coupling_table``). The correction becomes
 
 .. math::
 
    R_{rs} = \left[\frac{R_{TOA}}{T_d} - f_{path} R_{diff} - R_{dir}\right] \frac{f_w}{\pi}, \qquad
    f_{path} = \frac{T_{atm}}{T_d}, \quad f_w = \frac{T_d}{T_w}
 
-and :math:`f_{path}` also scales the path reflectance of the aerosol fit. With ``o2_model: lbl`` (default), the O2
-absorption of the O2-B (683-702 nm) and O2-A (755-775 nm) bands is computed line by line (HITRAN), averaged in the
-cells of the gaseous LUT, in place of the REPTRAN table, which makes these bands too deep at sub-nanometre
-resolution. ``gas_coupling: decoupled`` and ``o2_model: reptran`` give the results of hGRS 1.2.0. The analysis is
-in the research notebooks (:doc:`tutorials/research/index`).
+and :math:`f_{path}` also scales the path reflectance of the aerosol fit. With ``o2_model: lbl_o2b`` (default), the O2
+absorption of the O2-B band (683-702 nm) is computed line by line (HITRAN), averaged in the cells of the gaseous
+LUT, in place of the REPTRAN table, and the O2-A band (755-775 nm) keeps REPTRAN: against the SOS-ABS CKD, the
+band-mean O2 absorption of REPTRAN is 42-72 % too strong in the O2-B band and that of the line-by-line table
+15-18 % too weak in the O2-A band (air masses 1-3.5), which the closure with EnMAP at AERONET-OC stations confirms.
+``o2_model: lbl`` uses the line-by-line table in both bands. ``gas_coupling: decoupled`` and ``o2_model: reptran``
+give the results of hGRS 1.2.0. The analysis is in the research notebooks (:doc:`tutorials/research/index`).
 
 Water vapor
 -----------
 
-In each mega-pixel, the reflectance over :math:`\Lambda_{wv}` (800-1300 nm) is fitted by a linear
-background attenuated by water vapor:
+In each mega-pixel, the reflectance over :math:`\Lambda_{wv}` (931-1060 nm; 800-1300 nm with the former
+behavior), divided by the direct-beam transmittance of the other gases, is fitted by a linear background attenuated by water vapor:
 
 .. math::
 
@@ -176,10 +180,13 @@ With ``gas_coupling: path_length``, the path reflectance is modelled with its ow
 
 .. math::
 
-   R(\lambda) \simeq T_{atm}(\lambda; W)\, k\, R_p(\lambda) + T_{wv}(\lambda; W, \bar M)\, (a\lambda + b)
+   R(\lambda) \simeq \frac{T_{atm}(\lambda; W)}{T_g(\lambda)}\, k\, R_p(\lambda) + T_{wv}(\lambda; W, \bar M)\, (a\lambda + b)
 
-(first guess of :math:`W`: CAMS). The decoupled model retrieves an effective column, which over dark water is a
-fraction of the true one.
+with :math:`T_{atm}` the coupled transmittance of all the gases and :math:`T_g` the direct-beam transmittance of
+the gases other than water vapor (first guess of :math:`W`: CAMS). The decoupled model retrieves an effective
+column, which over dark water is a fraction of the true one (by a factor 3 to 5 at the AERONET-OC stations, with
+EnMAP). The default range keeps to the SWIR detector of EnMAP: the VNIR and SWIR reflectances disagree around
+900 nm by up to 50 %, which biases a fit across them.
 
 where :math:`T_{wv}` is interpolated in a pre-computed LUT. :math:`(W, a, b)` are retrieved by
 non-linear least squares within :math:`[0, 60] \times [-10, 1] \times [0, 1]`; the uncertainty of
@@ -288,7 +295,7 @@ Wavelength sets
      - Wavelengths (nm)
    * - :math:`\Lambda_{wv}`
      - ``wl_water_vapor``
-     - 800-1300
+     - 931-1060
    * - :math:`\Lambda_g`
      - ``wl_sunglint``
      - 2150-2250
