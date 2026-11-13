@@ -37,9 +37,10 @@ import colorcet as cc
 
 
 from aeronet_visu import data_loading as dl
+import aeronet_oc_db   # shared, up-to-date AERONET-OC database
 
 opj = os.path.join
-aeronet_dir = '/DATA/AERONET/OCv3/'
+aeronet_dir = str(aeronet_oc_db.default_root())   # raw AERONET-OC files of the database
 workdir = '/data/acix-iii'
 odir = '/data/acix-iii/matchup'
 

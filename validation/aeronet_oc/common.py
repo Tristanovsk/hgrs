@@ -4,7 +4,8 @@ Common settings and readers of the AERONET-OC validation of hGRS (EnMAP).
 Paths (environment variables override the defaults):
 
 * ``HGRS_VAL_ENMAP``: EnMAP L1C products, one folder per site or delivery (searched recursively);
-* ``HGRS_VAL_AERONET``: root of the AERONET-OC version 3 database (``aeronet_oc_db``: raw files
+* ``HGRS_VAL_AERONET``: root of the AERONET-OC version 3 database, default: the location shared by the
+  packages (``aeronet_oc_db``: ``$AERONET_OC_ROOT`` or ``~/.config/aeronet_oc_db/config.toml``; raw files
   ``<site>_OCv3.lev20|lev15`` and the products in ``db/``, updated with ``aeronet-oc-db update``);
 * ``HGRS_VAL_CAMS``: CAMS files, ``cams_forecast_YYYY-MM.nc`` or ``YYYY/MM/DD/YYYY-MM-DD-*.nc``;
 * ``HGRS_VAL_OUT``: output folder of the validation (matchup tables, simulations, L2A products).
@@ -19,7 +20,16 @@ import numpy as np
 import pandas as pd
 
 ENMAP_DIR = Path(os.environ.get('HGRS_VAL_ENMAP', '/data/satellite/enmap/EnMAP_L1C'))
-AERONET_DIR = Path(os.environ.get('HGRS_VAL_AERONET', '/DATA/AERONET/OCv3'))
+def _aeronet_root():
+    '''HGRS_VAL_AERONET, else the location of the shared AERONET-OC database (aeronet_oc_db:
+    $AERONET_OC_ROOT or ~/.config/aeronet_oc_db/config.toml)'''
+    if os.environ.get('HGRS_VAL_AERONET'):
+        return Path(os.environ['HGRS_VAL_AERONET'])
+    from aeronet_oc_db import default_root
+    return default_root()
+
+
+AERONET_DIR = _aeronet_root()
 CAMS_DIR = Path(os.environ.get('HGRS_VAL_CAMS', '/data/cams/world'))
 OUT_DIR = Path(os.environ.get('HGRS_VAL_OUT', '/data/satellite/enmap/hgrs_validation'))
 
