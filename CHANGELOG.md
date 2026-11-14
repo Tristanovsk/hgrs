@@ -26,6 +26,13 @@ All notable changes to hGRS are listed here, most recent first. The format follo
   `reflectance_sigma` (weight of the data term), in both the coupled and decoupled fits
   (`WaterVapor.regularization`). `prior: none` (default) gives the 2.0.0 fit. On 22 AERONET-OC matchups chosen
   among the largest water vapor errors, the MAPD of the column drops from 36 % to 4 %, as for CAMS alone.
+- Database of the EnMAP and PRISMA images, `hgrs.catalog` and the command `hgrs_catalog`: one copy of each
+  product by collection (`l1c`, `l1`, `l2c`, `l2a-hgrs/v<version>`, `l2w-acolite`, ...) and acquisition date,
+  producer and version read from the products; migration of existing folders as a reviewable plan (`plan`,
+  `apply`, `undo`: renames only, redundant copies to `_trash/`, former paths kept as symlinks in `legacy/`);
+  static STAC catalogue (layout of grstbx / GRSdriver.stac), GeoParquet index, views by site (former folders
+  and point sites inside the footprints), `search` and `ingest` of new downloads. Optional dependencies:
+  `pip install hGRS[catalog]` (geopandas, pyarrow, shapely) for the index and the search.
 
 ### Changed
 - Lower memory use, same products (bit for bit): the TOA reflectance cube is read once into a single array, and

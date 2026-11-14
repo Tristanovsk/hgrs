@@ -65,6 +65,8 @@ include = ["hgrs*"]
 
 [project.optional-dependencies]
 dev = ["black", "bumpver", "isort", "pip-tools", "pytest"]
+# search of the image database (hgrs.catalog)
+catalog = ["geopandas", "pyarrow", "shapely"]
 docs = [
     "sphinx>=7",
     "sphinx-book-theme>=1.1",
@@ -85,6 +87,7 @@ hgrs_hyperion = "hgrs.cli:hyperion"
 hgrs_emit = "hgrs.cli:emit"
 hgrs_tanager = "hgrs.cli:tanager"
 hgrs_config = "hgrs.config.loader:main"
+hgrs_catalog = "hgrs.catalog:main"
 
 [project.urls]
 Homepage = "https://github.com/Tristanovsk/hgrs"
