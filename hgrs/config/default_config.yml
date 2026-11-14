@@ -73,6 +73,13 @@ atmospheric_correction:
     # the retrieval, then NaN-mean) or nanmean_local, over smoothing_window mega-pixels
     smoothing_method: weighted_local
     smoothing_window: [5, 5]
+    # prior of the column (experimental): none or cams (Tikhonov term ((W - W_CAMS) / sigma_W)^2,
+    # sigma_W = max(prior_sigma_relative * W_CAMS, prior_sigma_min) in kg m-2); reflectance_sigma weights the
+    # data term. prior: none gives the 2.0.0 fit.
+    prior: none
+    prior_sigma_relative: 0.1
+    prior_sigma_min: 2.0
+    reflectance_sigma: 1.0e-3
   aerosol:
     # bands fitted by the aerosol and sunglint retrieval (nm, nearest band of the sensor)
     fit_wavelengths_nm: [1000, 1050, 1075, 1100, 1200, 1300, 1600, 1650, 1700, 2150, 2200, 2250]

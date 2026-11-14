@@ -225,6 +225,19 @@ non-linear least squares within :math:`[0, 60] \times [-10, 1] \times [0, 1]`; t
 with :math:`J` the Jacobian of the residuals :math:`r` and :math:`n` the number of bands. The
 reflectance is then divided by :math:`T_{wv}(\lambda; W)`, with :math:`W` of the nearest mega-pixel.
 
+**Prior of the column (experimental).** With ``water_vapor: prior: cams`` (off by default), the fit minimizes
+
+.. math::
+
+   \sum_{\lambda \in \Lambda_{wv}} \left[\frac{r(\lambda)}{\sigma_R}\right]^2
+   + \left[\frac{W - \bar W_{CAMS}}{\sigma_W^{prior}}\right]^2,
+   \qquad \sigma_W^{prior} = \max(\rho\, \bar W_{CAMS},\ \sigma_{min})
+
+with :math:`\sigma_R` = ``reflectance_sigma`` (1e-3), :math:`\rho` = ``prior_sigma_relative`` (0.1) and
+:math:`\sigma_{min}` = ``prior_sigma_min`` (2 kg m-2); :math:`r` and :math:`J` above then include the prior
+term. Over dark water the absorption band carries little information on :math:`W`, and the retrieved column
+scatters around the CAMS one; the prior keeps it within the uncertainty of CAMS.
+
 .. _methods-aerosol:
 
 Aerosol retrieval

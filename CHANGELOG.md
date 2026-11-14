@@ -21,6 +21,11 @@ All notable changes to hGRS are listed here, most recent first. The format follo
   AOT ends at its lower bound, a soft non-negativity lets the SWIR bands and CAMS set the AOT (Lucinda scene:
   98 % of the mega-pixels at the bound with the 2.0.0 fit, 4 % with `soft`, `nonnegativity_sigma: 2e-3` and the
   CAMS prior).
+- Water vapor retrieval, experimental: `water_vapor: prior: none | cams` (Tikhonov term towards the CAMS column,
+  `sigma_W = max(prior_sigma_relative * W_CAMS, prior_sigma_min)`, defaults 0.1 and 2 kg m-2) and
+  `reflectance_sigma` (weight of the data term), in both the coupled and decoupled fits
+  (`WaterVapor.regularization`). `prior: none` (default) gives the 2.0.0 fit. On 22 AERONET-OC matchups chosen
+  among the largest water vapor errors, the MAPD of the column drops from 36 % to 4 %, as for CAMS alone.
 
 ### Changed
 - Lower memory use, same products (bit for bit): the TOA reflectance cube is read once into a single array, and

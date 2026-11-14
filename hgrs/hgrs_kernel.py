@@ -1264,6 +1264,30 @@ def _water_vapor_residuals_coupled(x, tcwv_grid, Twv_table, Tatm_table, path, wl
             + Solver.interp_linear(tcwv_grid, Twv_table, tcwv) * (a * wl + b) - y)
 
 
+def _water_vapor_residuals_prior(x, residuals, args, sigma, prior):
+    r'''
+    Residuals of a water vapor model weighted by the uncertainty of the reflectance, with the prior of the column
+    (setting ``water_vapor: prior``) as an extra residual:
+    :math:`[r(\lambda)/\sigma_R,\ (W - \bar W_{CAMS})/\sigma_W]`, so that the cost is
+    :math:`\sum_\lambda (r/\sigma_R)^2 + ((W - \bar W_{CAMS})/\sigma_W)^2`.
+
+    :param residuals, args: model residual function and its arguments after ``x``
+    :param sigma: :math:`\sigma_R`
+    :param prior: :math:`(\bar W_{CAMS}, \sigma_W)`
+    '''
+    mean, sigma_w = prior
+    return np.append(residuals(x, *args) / sigma, (x[0] - mean) / sigma_w)
+
+
+def _water_vapor_lsq(residuals, args, fit, **kwargs):
+    r''':py:func:`scipy.optimize.least_squares` of ``residuals``, with the prior of ``fit['regularization']``'''
+    reg = fit.get('regularization')
+    if reg is not None:
+        args = (residuals, args, reg['sigma'], reg['prior'])
+        residuals = _water_vapor_residuals_prior
+    return least_squares(residuals, fit['x0'], args=args, **kwargs)
+
+
 def _fit_water_vapor_coupled_block(task):
     r'''Coupled water vapor fit of the mega-pixels of a block: array (x, y, 6) with
     :math:`(W, k, b)` and their standard deviations (the slope :math:`a` is not stored)'''
@@ -1279,11 +1303,11 @@ def _fit_water_vapor_coupled_block(task):
             if valid.sum() <= 4:
                 continue
             y = y[valid]
-            res_lsq = least_squares(_water_vapor_residuals_coupled, fit['x0'],
-                                    args=(fit['tcwv_grid'], fit['Twv_table'][:, valid], fit['Tatm_table'][:, valid],
-                                          fit['path'][valid], fit['wl'][valid], y),
-                                    bounds=([0, 0, -10, -1], [60, 5, 1, 1]),
-                                    diff_step=1e-2, xtol=1e-2, ftol=1e-2, max_nfev=40)
+            res_lsq = _water_vapor_lsq(_water_vapor_residuals_coupled,
+                                       (fit['tcwv_grid'], fit['Twv_table'][:, valid], fit['Tatm_table'][:, valid],
+                                        fit['path'][valid], fit['wl'][valid], y), fit,
+                                       bounds=([0, 0, -10, -1], [60, 5, 1, 1]),
+                                       diff_step=1e-2, xtol=1e-2, ftol=1e-2, max_nfev=40)
             xres = res_lsq.x
             resVariance = (res_lsq.fun ** 2).sum() / max(len(res_lsq.fun) - len(res_lsq.x), 1)
             hess = np.matmul(res_lsq.jac.T, res_lsq.jac)
@@ -1312,10 +1336,10 @@ def _fit_water_vapor_block(task):
                 continue
             y = y[valid]
             # TODO put solver parameter in the configuration
-            res_lsq = least_squares(_water_vapor_residuals, fit['x0'],
-                                    args=(fit['tcwv_grid'], fit['Twv_table'][:, valid], fit['wl'][valid], y),
-                                    bounds=([0, -10, 0], [60, 1, 1]),
-                                    diff_step=1e-2, xtol=1e-2, ftol=1e-2, max_nfev=20)
+            res_lsq = _water_vapor_lsq(_water_vapor_residuals,
+                                       (fit['tcwv_grid'], fit['Twv_table'][:, valid], fit['wl'][valid], y), fit,
+                                       bounds=([0, -10, 0], [60, 1, 1]),
+                                       diff_step=1e-2, xtol=1e-2, ftol=1e-2, max_nfev=20)
             xres = res_lsq.x
             resVariance = (res_lsq.fun ** 2).sum() / (len(res_lsq.fun) - len(res_lsq.x))
             hess = np.matmul(res_lsq.jac.T, res_lsq.jac)
@@ -1590,6 +1614,24 @@ class WaterVapor(Solver):
     def func2(self, x, Twv, wl, y):
         return self.toa_simu2(wl, Twv, *x) - y
 
+    def regularization(self):
+        r'''
+        Prior of the water vapor column (setting ``water_vapor: prior: cams``, experimental): dict ``sigma``
+        (:math:`\sigma_R` = ``reflectance_sigma``) and ``prior`` :math:`(\bar W_{CAMS}, \sigma_W)` with
+        :math:`\sigma_W = \max(` ``prior_sigma_relative`` :math:`\bar W_{CAMS},` ``prior_sigma_min`` :math:`)`,
+        for :py:func:`_water_vapor_residuals_prior`; None without prior (default) or without CAMS column.
+        '''
+        settings = self.parameters
+        if settings.prior == 'none':
+            return None
+        cams = getattr(self.prod, 'cams_data', None)
+        if cams is None or 'tcwv' not in cams or not np.isfinite(float(cams.tcwv)):
+            logger.warning('water vapor prior: no CAMS column, fit without prior')
+            return None
+        w = float(cams.tcwv)
+        return dict(sigma=settings.reflectance_sigma,
+                    prior=(w, max(settings.prior_sigma_relative * w, settings.prior_sigma_min)))
+
     def solve(self, x0=None, pool=None):
         r'''
         Run the fit on every mega-pixel with enough water pixels (parallel processing of blocks of
@@ -1615,12 +1657,12 @@ class WaterVapor(Solver):
             w0 = float(cams.tcwv) if cams is not None and 'tcwv' in cams else x0[0]
             fit = dict(x0=[min(max(w0, 0.5), 59.), 1., 0., 0.], tcwv_grid=self.tcwv_grid, Twv_table=self.Twv_table,
                        Tatm_table=self.Tatm_table, path=self.path_reflectance, wl=self.wl_mic,
-                       pixel_threshold=self.prod.pixel_threshold)
+                       pixel_threshold=self.prod.pixel_threshold, regularization=self.regularization())
             result = self.fit_blocks(_fit_water_vapor_coupled_block, spectra, water_pixel_number, fit, 6,
                                      self.prod.block_size, pool)
         else:
             fit = dict(x0=x0, tcwv_grid=self.tcwv_grid, Twv_table=self.Twv_table, wl=self.wl_mic,
-                       pixel_threshold=self.prod.pixel_threshold)
+                       pixel_threshold=self.prod.pixel_threshold, regularization=self.regularization())
             result = self.fit_blocks(_fit_water_vapor_block, spectra, water_pixel_number, fit, 6,
                                      self.prod.block_size, pool)
         self.result = result

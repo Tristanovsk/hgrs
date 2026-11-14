@@ -7,6 +7,7 @@ import numpy as np
 import xarray as xr
 
 AEROSOL_PRIORS = ("none", "cams")
+WATER_VAPOR_PRIORS = ("none", "cams")
 NONNEGATIVITY_MODES = ("hard", "soft")
 
 
@@ -85,6 +86,20 @@ class WaterVaporConfig:
     first_guess: tuple[float, float, float] = (2.0, -0.04, 0.1)
     smoothing_method: str = "none"
     smoothing_window: tuple[int, int] = (5, 5)
+    # prior of the water vapor column (Tikhonov term ((W - W_CAMS) / sigma_W)^2 in the cost): 'none' or
+    # 'cams', with sigma_W = max(prior_sigma_relative * W_CAMS, prior_sigma_min) (kg m-2)
+    prior: str = "none"
+    prior_sigma_relative: float = 0.1
+    prior_sigma_min: float = 2.0
+    # uncertainty of the fitted reflectance, weight of the data term against the prior
+    reflectance_sigma: float = 1e-3
+
+    def __post_init__(self):
+        if self.prior not in WATER_VAPOR_PRIORS:
+            raise ValueError(f"water_vapor: prior must be one of {WATER_VAPOR_PRIORS}, not {self.prior!r}")
+        if self.prior_sigma_relative < 0 or self.prior_sigma_min <= 0 or self.reflectance_sigma <= 0:
+            raise ValueError("water_vapor: prior_sigma_relative must be >= 0, prior_sigma_min and "
+                             "reflectance_sigma > 0")
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "WaterVaporConfig":
