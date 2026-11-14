@@ -10,11 +10,14 @@ Comparison of the hGRS versions with AERONET-OC (``aeronet_at_overpass.nc`` and 
 Only the matchups processed by all the versions and passing the quality checks (``QC``) are compared. AERONET-OC
 Rrs below ``QC['rrs_min']`` (-0.005 sr-1) are not physical (a few values of -0.04 to -0.14 sr-1 at 779-1020 nm,
 far from the noise of clear water, within 3e-4 sr-1 of 0) and are set to NaN (band left out of the matchup).
+When DLR has processed a scene several times, only the latest processing is kept (``latest_processing``), so that
+each overpass counts once.
 Writes ``OUT_DIR/compare/`` : ``matchups_<version>.nc`` (matchup x AERONET band), ``stats_rrs.csv``,
 ``stats_params.csv``, ``band_depth.csv`` and figures.
 
 Usage: python compare.py version [version ...]
 '''
+import re
 import sys
 import warnings
 
@@ -37,6 +40,24 @@ def valid_aeronet(aer):
     '''AERONET-OC data with the non-physical Rrs (< QC['rrs_min']) set to NaN; number of values removed'''
     bad = aer.Rrs < QC['rrs_min']
     return aer.assign(Rrs=aer.Rrs.where(~bad)), int(bad.sum())
+
+
+# EnMAP product: scene (datatake, start time, tile) and DLR processing time
+ENMAP_PRODUCT = re.compile(r'^(ENMAP01-_+L\w+-DT\d+_\d{8}T\d{6}Z_\d{3})_V\d+_(\d{8}T\d{6}Z)')
+
+
+def latest_processing(matchups):
+    '''matchups (``<product>__<site>``) without the older DLR processings of the same scene and site; other
+    products (e.g. PRISMA) are kept as they are'''
+    latest = {}
+    for m in matchups:
+        product, _, site = m.rpartition('__')
+        g = ENMAP_PRODUCT.match(product)
+        key, proc = ((g[1], site), g[2]) if g else ((product, site), '')
+        if key not in latest or proc > latest[key][0]:
+            latest[key] = (proc, m)
+    keep = {m for _, m in latest.values()}
+    return [m for m in matchups if m in keep]
 
 
 def to_aeronet_bands(rrs, wl_aer):
@@ -116,13 +137,16 @@ def main(versions):
     data = {v: load(v, aer) for v in versions}
     data = {v: d for v, d in data.items() if d is not None}
     common = sorted(set.intersection(*[set(d.matchup.values) for d in data.values()]))
+    n_all = len(common)
+    common = latest_processing(common)
+    print(f'{n_all} matchups processed by all versions, {n_all - len(common)} older DLR processings left out')
     # quality checks on the first version (same pixels for all)
     d0 = data[versions[0]].sel(matchup=common)
     cv = (d0.Rrs_std / d0.Rrs).sel(wl=560, method='nearest')
     ok = (d0.n_pix >= QC['n_pix_min']) & (np.abs(cv) <= QC['cv_max'])
     ok &= (aer.lag_min.sel(matchup=common) <= QC['lag_max'])
     keep = [m for m, k in zip(common, ok.values) if k]
-    print(f'{len(common)} matchups processed by all versions, {len(keep)} pass the quality checks')
+    print(f'{len(common)} matchups, {len(keep)} pass the quality checks')
     pd.Series(keep).to_csv(CMP / 'matchups_qc.csv', index=False, header=['matchup'])
     a = aer.sel(matchup=keep)
     srows, prows, drows = [], [], []
