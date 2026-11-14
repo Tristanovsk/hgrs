@@ -7,7 +7,9 @@ Comparison of the hGRS versions with AERONET-OC (``aeronet_at_overpass.nc`` and 
 * band depth of Rrs in the absorption bands (Rrs of the band minus the linear continuum of its neighbours), at the
   station and for the darkest water pixels of the crop: a correct gaseous correction gives a smooth spectrum.
 
-Only the matchups processed by all the versions and passing the quality checks (``qc``) are compared.
+Only the matchups processed by all the versions and passing the quality checks (``QC``) are compared. AERONET-OC
+Rrs below ``QC['rrs_min']`` (-0.005 sr-1) are not physical (a few values of -0.04 to -0.14 sr-1 at 779-1020 nm,
+far from the noise of clear water, within 3e-4 sr-1 of 0) and are set to NaN (band left out of the matchup).
 Writes ``OUT_DIR/compare/`` : ``matchups_<version>.nc`` (matchup x AERONET band), ``stats_rrs.csv``,
 ``stats_params.csv``, ``band_depth.csv`` and figures.
 
@@ -28,7 +30,13 @@ CMP = OUT_DIR / 'compare'
 # band, left and right neighbours (nm): O2-B, H2O 720, O2-A, H2O 820, H2O 940, H2O 1130, O2 1270
 DEPTHS = [(687.0, 679.7, 699.8), (720.5, 706.6, 741.8), (763.7, 749.1, 778.6), (816.6, 778.6, 863.7),
           (941.2, 887.7, 993.1), (1135., 1050., 1240.), (1268., 1240., 1290.)]
-QC = dict(n_pix_min=13, cv_max=0.25, lag_max=60.)
+QC = dict(n_pix_min=13, cv_max=0.25, lag_max=60., rrs_min=-0.005)
+
+
+def valid_aeronet(aer):
+    '''AERONET-OC data with the non-physical Rrs (< QC['rrs_min']) set to NaN; number of values removed'''
+    bad = aer.Rrs < QC['rrs_min']
+    return aer.assign(Rrs=aer.Rrs.where(~bad)), int(bad.sum())
 
 
 def to_aeronet_bands(rrs, wl_aer):
@@ -102,7 +110,8 @@ def stats(x, y):
 
 def main(versions):
     CMP.mkdir(exist_ok=True)
-    aer = xr.open_dataset(OUT_DIR / 'aeronet_at_overpass.nc').load()
+    aer, n_bad = valid_aeronet(xr.open_dataset(OUT_DIR / 'aeronet_at_overpass.nc').load())
+    print(f'{n_bad} AERONET-OC Rrs < {QC["rrs_min"]} sr-1 left out')
     wl_aer = aer.wl_aeronet.values
     data = {v: load(v, aer) for v in versions}
     data = {v: d for v, d in data.items() if d is not None}
