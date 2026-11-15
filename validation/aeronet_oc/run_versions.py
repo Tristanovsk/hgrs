@@ -39,7 +39,7 @@ HALF = '150'
 JOBS_PER_WORKER = int(os.environ.get('HGRS_VAL_JOBS_PER_WORKER', '25'))
 # memory caps of each job (process_one.py + its pool), systemd size syntax
 MEM_HIGH = os.environ.get('HGRS_VAL_MEM_HIGH', '')
-MEM_MAX = os.environ.get('HGRS_VAL_MEM_MAX', '12G')
+MEM_MAX = os.environ.get('HGRS_VAL_MEM_MAX', '20G')
 SWAP_MAX = os.environ.get('HGRS_VAL_SWAP_MAX', '512M')
 
 
