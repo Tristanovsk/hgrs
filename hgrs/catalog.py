@@ -456,7 +456,8 @@ def apply(df, root, legacy_links=True, force=False):
             f = root / 'catalog' / 'provenance.csv'
             prov.to_csv(f, mode='a', header=not f.exists(), index=False)
         # empty former folders
-        tops = sorted({Path(s).relative_to(root).parts[0] for s in df.src})
+        tops = sorted({Path(s).relative_to(root).parts[0] for s in df.src
+                       if Path(s).is_relative_to(root)})        # ingest() also takes paths outside root
         for top in tops:
             t = root / top
             if t.is_dir() and not t.is_symlink():
