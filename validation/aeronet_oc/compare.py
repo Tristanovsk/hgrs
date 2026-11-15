@@ -70,8 +70,8 @@ def to_aeronet_bands(rrs, wl_aer):
     ok = np.isfinite(v)
     num = np.where(ok, v, 0) @ w.T
     den = ok.astype(float) @ w.T
-    # require at least half of the weight
-    out = np.where(den >= 0.5 * w.sum(1), num / np.where(den > 0, den, 1), np.nan)
+    # require at least half of the weight (NaN where no band of the sensor is within FWHM, e.g. 400 nm for EnMAP)
+    out = np.where((den > 0) & (den >= 0.5 * w.sum(1)), num / np.where(den > 0, den, 1), np.nan)
     return xr.DataArray(out, dims=rrs.dims[:-1] + ('wl_aeronet',),
                         coords={**{d: rrs[d] for d in rrs.dims[:-1] if d in rrs.coords}, 'wl_aeronet': wl_aer})
 
@@ -120,13 +120,16 @@ def load(version, aer):
 def stats(x, y):
     ok = np.isfinite(x) & np.isfinite(y)
     x, y = x[ok], y[ok]
-    if ok.sum() < 3:
-        return dict(N=int(ok.sum()))
+    n = int(ok.sum())
+    if n == 0:
+        return dict(N=0)
     d = y - x
-    return dict(N=int(ok.sum()), bias=float(np.median(d)), mad=float(np.median(np.abs(d))),
+    # correlation and slope from 3 matchups (a single matchup still gives the differences)
+    return dict(N=n, bias=float(np.median(d)), mad=float(np.median(np.abs(d))),
                 rmsd=float(np.sqrt(np.mean(d ** 2))),
                 mapd=float(100 * np.median(np.abs(d) / np.abs(x))),
-                r=float(np.corrcoef(x, y)[0, 1]), slope=float(np.polyfit(x, y, 1)[0]))
+                r=float(np.corrcoef(x, y)[0, 1]) if n >= 3 else np.nan,
+                slope=float(np.polyfit(x, y, 1)[0]) if n >= 3 else np.nan)
 
 
 def main(versions):

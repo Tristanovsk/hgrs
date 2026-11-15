@@ -1,6 +1,6 @@
 '''
-Process one matchup of ``matchups.csv`` with one version of hGRS, on a crop of the EnMAP L1C image centred on
-the AERONET-OC station, and write the results at the station to
+Process one matchup of ``matchups.csv`` with one version of hGRS, on a crop of the EnMAP L1C (or PRISMA L1 +
+L2C, ``path`` = ``<l1>;<l2c>``) image centred on the AERONET-OC station, and write the results at the station to
 ``OUT_DIR/runs/<version>/<product>__<site>.nc``:
 
 * ``Rrs`` (wl): median of the water pixels of a ``BOX`` x ``BOX`` pixel box centred on the station,
@@ -32,7 +32,7 @@ import xarray as xr
 warnings.filterwarnings('ignore')
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from common import OUT_DIR  # noqa: E402
+from common import OUT_DIR, image_path  # noqa: E402
 
 BOX = 15          # box of the station (pixels, 450 m)
 CORE = 5          # core of the box for the median (pixels, 150 m)
@@ -69,12 +69,16 @@ def main(version, code_dir, index, config=None, half=150, ncpu=8):
     # crop the L1C image as soon as it is read, and limit the pool of the retrievals
     if hasattr(hgrs, 'drivers'):
         from hgrs.drivers.enmap import EnmapDriver
-        read = EnmapDriver.read
-
-        @functools.wraps(read)
-        def read_cropped(self, *args, **kwargs):
-            return crop(read(self, *args, **kwargs))
-        EnmapDriver.read = read_cropped
+        drivers = [EnmapDriver]
+        try:
+            from hgrs.drivers.prisma import PrismaDriver
+            drivers.append(PrismaDriver)
+        except ImportError:
+            pass
+        for cls in drivers:
+            def read_cropped(self, *args, _read=cls.read, **kwargs):
+                return crop(_read(self, *args, **kwargs))
+            cls.read = functools.wraps(cls.read)(read_cropped)
         import hgrs.hgrs_process as hp
         if hasattr(hp, 'Pool'):
             hp.Pool = functools.partial(Pool, ncpu)
@@ -89,7 +93,7 @@ def main(version, code_dir, index, config=None, half=150, ncpu=8):
     t0 = time.time()
     try:
         proc = hgrs.Process()
-        proc.execute(row.path, row.cams)
+        proc.execute(image_path(row.path), row.cams)
         l2 = proc.l2_prod
         if l2 is None:
             raise RuntimeError('no L2 product')

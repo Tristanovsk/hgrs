@@ -1,5 +1,5 @@
 '''
-Matchup inventory: EnMAP L1C scenes covering an AERONET-OC station with measurements within
+Matchup inventory: EnMAP L1C (or PRISMA L1, ``HGRS_VAL_SENSOR=prisma``) scenes covering an AERONET-OC station with measurements within
 ``MAX_LAG`` of the overpass. Writes ``OUT_DIR/matchups.csv`` (one row per scene and station, with the
 nearest level 2.0 record, or 1.5 if there is no level 2.0 record).
 
@@ -11,7 +11,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from common import OUT_DIR, enmap_scenes, aeronet_sites, aeronet_times, inside, cams_file
+from common import OUT_DIR, SENSOR, scenes as sensor_scenes, aeronet_sites, aeronet_times, inside, cams_file
 
 warnings.filterwarnings('ignore')
 MAX_LAG = pd.Timedelta(hours=float(sys.argv[1]) if len(sys.argv) > 1 else 3)
@@ -19,9 +19,9 @@ MAX_LAG = pd.Timedelta(hours=float(sys.argv[1]) if len(sys.argv) > 1 else 3)
 
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    scenes = enmap_scenes()
+    scenes = sensor_scenes()
     sites = aeronet_sites()
-    print(f'{len(scenes)} EnMAP products, {len(sites)} AERONET-OC sites')
+    print(f'{len(scenes)} {SENSOR} products, {len(sites)} AERONET-OC sites')
     cache = {}
     rows = []
     for s in scenes.itertuples():

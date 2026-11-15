@@ -1,9 +1,11 @@
 '''
-Common settings and readers of the AERONET-OC validation of hGRS (EnMAP).
+Common settings and readers of the AERONET-OC validation of hGRS (EnMAP, PRISMA).
 
 Paths (environment variables override the defaults):
 
+* ``HGRS_VAL_SENSOR``: ``enmap`` (default) or ``prisma``: sensor of the matchup inventory (``scenes``);
 * ``HGRS_VAL_ENMAP``: EnMAP L1C products, one folder per site or delivery (searched recursively);
+* ``HGRS_VAL_PRISMA``: root of the PRISMA image database (``catalog/products.parquet`` of ``hgrs_catalog``);
 * ``HGRS_VAL_AERONET``: root of the AERONET-OC version 3 database, default: the location shared by the
   packages (``aeronet_oc_db``: ``$AERONET_OC_ROOT`` or ``~/.config/aeronet_oc_db/config.toml``; raw files
   ``<site>_OCv3.lev20|lev15`` and the products in ``db/``, updated with ``aeronet-oc-db update``);
@@ -19,7 +21,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+SENSOR = os.environ.get('HGRS_VAL_SENSOR', 'enmap').lower()
 ENMAP_DIR = Path(os.environ.get('HGRS_VAL_ENMAP', '/data/satellite/enmap/EnMAP_L1C'))
+PRISMA_DIR = Path(os.environ.get('HGRS_VAL_PRISMA', '/data/satellite/prisma'))
 def _aeronet_root():
     '''HGRS_VAL_AERONET, else the location of the shared AERONET-OC database (aeronet_oc_db:
     $AERONET_OC_ROOT or ~/.config/aeronet_oc_db/config.toml)'''
@@ -62,6 +66,43 @@ def enmap_scenes(root=ENMAP_DIR):
     # the same datatake is delivered several times (sites, reprocessings): keep every copy, they are
     # identified by the product id
     return df.drop_duplicates('product').reset_index(drop=True)
+
+
+# ------------------------------------------------------------------------------------------------
+# PRISMA scenes
+# ------------------------------------------------------------------------------------------------
+_PRS_KEY = re.compile(r'_(\d{14}_\d{14}_\d{4})$')
+
+
+def prisma_scenes(root=PRISMA_DIR):
+    '''Table of the PRISMA L1 products of the image database of ``root`` (``catalog/products.parquet``) that
+    have their L2C product (viewing angles): product id, ``path`` = ``<l1>;<l2c>``, L1 processor version,
+    start time and footprint polygon (lon, lat).'''
+    import geopandas as gpd
+    g = gpd.read_parquet(root / 'catalog' / 'products.parquet')
+    key = lambda pid: (m := _PRS_KEY.search(pid)) and m.group(1)  # noqa: E731
+    l2c = {key(r.id): r.path for r in g[g.collection == 'prisma-l2c'].itertuples()}
+    rows = []
+    for r in g[g.collection == 'prisma-l1'].itertuples():
+        k = key(r.id)
+        if k not in l2c or r.geometry is None:
+            continue
+        geom = r.geometry if r.geometry.geom_type == 'Polygon' else r.geometry.convex_hull
+        rows.append(dict(product=r.id, path=f'{r.path};{l2c[k]}', version=r.version or '',
+                         time=pd.Timestamp(r.datetime).tz_localize(None), footprint=list(geom.exterior.coords)))
+    return pd.DataFrame(rows)
+
+
+def scenes():
+    '''scenes of the sensor ``SENSOR`` (``enmap_scenes`` or ``prisma_scenes``)'''
+    return prisma_scenes() if SENSOR == 'prisma' else enmap_scenes()
+
+
+def image_path(path):
+    '''input of ``hgrs.Process.execute`` from the ``path`` of ``matchups.csv``: the EnMAP L1C folder, or
+    ``[l1, l2c]`` for PRISMA (``<l1>;<l2c>``)'''
+    path = str(path)
+    return path.split(';') if ';' in path else path
 
 
 def inside(lon, lat, polygon):
