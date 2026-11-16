@@ -54,7 +54,10 @@ Each fix changes the products; `previous_behavior` restores the former processin
   that each wavelength comes from one detector, as for EnMAP.
 - Aerosol LUT: radiances interpolated in wavelength quadratically in log-log (power law of the wavelength) instead
   of linear space (leave-one-out on the OSOAA LUT: ~1 % error instead of ~10 % in the visible).
-- OmniCloudMask: NIR input at 865 nm instead of 940 nm, outside the water vapour absorption.
+- OmniCloudMask: run with the NIR at 865 nm and at 940 nm, a pixel is masked only where both runs flag it. With
+  940 nm alone the input depended on the water vapour and gave wrong shadows; with 865 nm alone clear dark water
+  was flagged as thin cloud (AAOT 2025-07-04 masked entirely). On 89 AERONET-OC crops: 5.0 % of the water
+  masked instead of 9.6 % (865) / 7.1 % (940), station pixels fully masked on 2 crops instead of 6 / 4.
 - Water vapor transmittance: a clear `ValueError` when the water vapor retrieval is NaN everywhere (no water
   pixel left after the cloud and water masks) instead of numpy's "zero-size array to reduction operation fmin".
 

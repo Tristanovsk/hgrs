@@ -306,11 +306,12 @@ class Process():
         logger.info('Apply omnicloudmask')
         red_index = 670
         green_index = 550
-        # NIR band of OmniCloudMask (trained on Sentinel-2 B8/B8A, ~842-865 nm): 865 nm, outside the water
-        # vapour absorption around 940 nm, which made the input depend on the water vapour content
-        nir_index = 940 if behavior.PREVIOUS_BEHAVIOR else 865
+        # NIR band(s) of OmniCloudMask: run with 865 nm (as Sentinel-2 B8/B8A of its training) and with 940 nm,
+        # masked only where both agree; each alone has false detections over water (865 nm: clear dark water
+        # flagged as thin cloud; 940 nm: shadows, input depending on the water vapour)
+        nir_indices = [940] if behavior.PREVIOUS_BEHAVIOR else [865, 940]
         rgnir = prod.raster.Rtoa.sel(
-            wl=[red_index, green_index, nir_index], method='nearest'
+            wl=[red_index, green_index, *nir_indices], method='nearest'
         ).fillna(0)
         omnimask = prod.get_omnicloudmask(rgnir)
         # OmniCloudMask classes 1 and 2 are thick/thin cloud; class 3 is

@@ -643,7 +643,12 @@ class Product():
         - 2 = thin cloud
         - 3 = cloud shadow
 
-        :param rgnir: raster xarray object with the red, green and nir bands (in this order)
+        With several NIR bands, OmniCloudMask is run once per NIR band (with the same red and green bands)
+        and a pixel is flagged only where all the runs flag it (any class): each NIR choice has its own false
+        detections over water (865 nm: clear dark water as thin cloud; 940 nm: wrong shadows, depends on the
+        water vapour), and they rarely coincide. The class of a flagged pixel is the one of the first NIR band.
+
+        :param rgnir: raster xarray object with the red, green and one or more nir bands (in this order)
         :return omnimask: raster of the retrieved mask
 
         Examples
@@ -652,7 +657,7 @@ class Product():
 
         .. code-block:: python
 
-           rgnir = prod.raster.Rtoa.sel(wl=[670, 550, 940], method='nearest').fillna(0)
+           rgnir = prod.raster.Rtoa.sel(wl=[670, 550, 865, 940], method='nearest').fillna(0)
            omnimask = prod.get_omnicloudmask(rgnir)
            prod.raster['Rtoa'] = prod.raster['Rtoa'].where(omnimask == 0)
 
@@ -664,15 +669,24 @@ class Product():
           https://doi.org/10.1016/j.rse.2025.114694
         '''
 
-        pred = predict_from_array(rgnir.fillna(0).values)
-        omnimask = xr.DataArray(pred[0],
+        values = rgnir.fillna(0).values
+        if values.shape[0] < 3:
+            raise ValueError('rgnir needs the red, green and at least one nir band')
+        preds = [predict_from_array(values[[0, 1, i]])[0] for i in range(2, values.shape[0])]
+        pred = preds[0]
+        for other in preds[1:]:
+            pred = np.where(other == 0, 0, pred)
+        nir_wl = [float(w) for w in rgnir.wl.values[2:]] if 'wl' in rgnir.coords else []
+        omnimask = xr.DataArray(pred,
                                 dims=["y", "x"],
                                 coords=dict(x=rgnir.x.values,
                                             y=rgnir.y.values,
                                             time=rgnir.time,
                                             ),
                                 attrs=dict(
-                                    description="OmniCloudMask, see https://github.com/DPIRD-DMA/OmniCloudMask",
+                                    description="OmniCloudMask, see https://github.com/DPIRD-DMA/OmniCloudMask; "
+                                                "flagged only where the runs with all the nir bands agree",
+                                    nir_wavelengths=nir_wl,
                                     reference='https://doi.org/10.1016/J.RSE.2025.114694'),
                                 )
         omnimask.name = 'omnimask'
