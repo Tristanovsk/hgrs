@@ -985,11 +985,15 @@ class Algo(Product):
         transmittance LUT. Result in ``Twv_raster``.
 
         :param tcwv_raster: xarray.Dataset with ``tcwv`` (see :py:class:`WaterVapor`)
+        :raises ValueError: if the retrieved water vapor is NaN everywhere
         '''
         tcwv_source = tcwv_raster.get("tcwv_smooth", tcwv_raster.tcwv)
         tcwv_vals = tcwv_source.round(1)
         tcwvs = np.unique(tcwv_vals)
         tcwvs = tcwvs[~np.isnan(tcwvs)]
+        if tcwvs.size == 0:
+            raise ValueError('no valid water vapor retrieval (tcwv NaN everywhere): no water pixel left after '
+                             'the cloud and water masks?')
         # TODO improve for air_mass raster
         Twvs = self.Twv_lut.Twv.interp(air_mass=self.air_mass_mean).interp(tcwv=tcwvs, method='linear').drop_vars('air_mass')
         self.Twv_raster = Twvs.interp(tcwv=tcwv_vals, method='nearest')

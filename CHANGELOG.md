@@ -55,6 +55,8 @@ Each fix changes the products; `previous_behavior` restores the former processin
 - Aerosol LUT: radiances interpolated in wavelength quadratically in log-log (power law of the wavelength) instead
   of linear space (leave-one-out on the OSOAA LUT: ~1 % error instead of ~10 % in the visible).
 - OmniCloudMask: NIR input at 865 nm instead of 940 nm, outside the water vapour absorption.
+- Water vapor transmittance: a clear `ValueError` when the water vapor retrieval is NaN everywhere (no water
+  pixel left after the cloud and water masks) instead of numpy's "zero-size array to reduction operation fmin".
 
 ## [2.0.0] - 2026-11-13
 
