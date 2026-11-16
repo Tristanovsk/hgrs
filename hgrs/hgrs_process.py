@@ -306,7 +306,9 @@ class Process():
         logger.info('Apply omnicloudmask')
         red_index = 670
         green_index = 550
-        nir_index = 940
+        # NIR band of OmniCloudMask (trained on Sentinel-2 B8/B8A, ~842-865 nm): 865 nm, outside the water
+        # vapour absorption around 940 nm, which made the input depend on the water vapour content
+        nir_index = 940 if behavior.PREVIOUS_BEHAVIOR else 865
         rgnir = prod.raster.Rtoa.sel(
             wl=[red_index, green_index, nir_index], method='nearest'
         ).fillna(0)

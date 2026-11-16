@@ -13,7 +13,7 @@ from scipy.interpolate import RegularGridInterpolator
 from ..auxdata import SolarIrradiance
 from ..utils import Misc
 from ..spectral_sensitivity import Gaussian
-from ..config import SensorDescription
+from ..config import SensorDescription, behavior
 from .base import L1Driver
 
 logger = logging.getLogger(__name__)
@@ -248,13 +248,15 @@ class EnmapDriver(L1Driver):
         F0 = F0 * D2
         self.F0 = F0
 
-        # Preserve the established EnMAP two-stage irradiance resampling.
         self.sensor_description = SensorDescription(
             name='EnMAP',
             sensor_mod=Gaussian(data.wl.values, data.fwhm.values),
 
         )
-        F0 = self.sensor_description.convolve(F0).rename({'wl_sensor': 'wl'})
+        if behavior.PREVIOUS_BEHAVIOR:
+            # former two-stage resampling: F0 convolved to the bands, then convolved again below (the band
+            # response applied twice, up to ~2.7 % error on F0 near the Fraunhofer lines)
+            F0 = self.sensor_description.convolve(F0).rename({'wl_sensor': 'wl'})
 
         # Apply the same sensor response operator used later in atmospheric correction.
         F0_sensor = self.sensor_description.convolve(

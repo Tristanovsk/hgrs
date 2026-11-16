@@ -194,8 +194,10 @@ class SolarIrradiance():
 
     @staticmethod
     def Gamma2sigma(Gamma):
-        '''Function to convert FWHM (Gamma) to standard deviation (sigma)'''
-        return Gamma * np.sqrt(2.) / (np.sqrt(2. * np.log(2.)) * 2.)
+        '''Function to convert FWHM (Gamma) to standard deviation (sigma): FWHM / (2 sqrt(2 ln 2)), or the former
+        value, sqrt(2) larger, with PREVIOUS_BEHAVIOR'''
+        from .spectral_sensitivity import gaussian_fwhm_to_sigma
+        return gaussian_fwhm_to_sigma(Gamma)
 
     @staticmethod
     def gaussian(x, mu, sigma):

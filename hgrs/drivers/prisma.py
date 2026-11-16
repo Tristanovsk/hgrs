@@ -9,7 +9,7 @@ import h5py
 from ..auxdata import SolarIrradiance
 from ..utils import Reproj, Misc
 from ..spectral_sensitivity import Gaussian
-from ..config import SensorDescription
+from ..config import SensorDescription, behavior
 from .base import L1Driver
 
 logger = logging.getLogger(__name__)
@@ -137,6 +137,15 @@ class PrismaDriver(L1Driver):
         fwhm = ds.attrs["List_Fwhm_Vnir"][5:]
         fwhm = np.append(fwhm, ds.attrs["List_Fwhm_Swir"][:-2])
         sort_index = np.argsort(wl)
+        if not behavior.PREVIOUS_BEHAVIOR:
+            # VNIR / SWIR overlap (~943-956 nm): drop the VNIR bands from the first SWIR band on, so that each
+            # wavelength comes from one detector (the water-vapour window around 940 nm otherwise interleaves
+            # the bands of the two detectors, whose calibrations differ; as the EnMAP driver does)
+            n_vnir = len(ds.attrs["List_Cw_Vnir"][5:])
+            swir_wl = wl[n_vnir:]
+            vnir_drop = np.zeros(len(wl), bool)
+            vnir_drop[:n_vnir] = wl[:n_vnir] >= swir_wl[swir_wl > 0].min()
+            sort_index = sort_index[~vnir_drop[sort_index]]
         wl = wl[sort_index]
         fwhm = fwhm[sort_index]
         fwhm = xr.DataArray(data=fwhm, name='fwhm',

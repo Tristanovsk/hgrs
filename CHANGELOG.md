@@ -44,6 +44,18 @@ All notable changes to hGRS are listed here, most recent first. The format follo
   relative difference 1.2e-7), `aot_ref` by 6e-7, `tcwv` by 6e-4 kg m-2 for 99 % of the mega-pixels (0.015 at
   most); masks unchanged.
 
+### Fixed
+Each fix changes the products; `previous_behavior` restores the former processing.
+- Gaussian band response: sigma = FWHM / (2 sqrt(2 ln 2)) (`gaussian_fwhm_to_sigma`, also used by
+  `SolarIrradiance.Gamma2sigma`); the former sigma was sqrt(2) too large (0.60 FWHM).
+- EnMAP: the solar irradiance F0 is convolved with the band response once; the former two-stage resampling
+  applied it twice (up to ~2.7 % error on F0 near the Fraunhofer lines).
+- PRISMA: in the VNIR / SWIR overlap (~943-956 nm) the VNIR bands from the first SWIR band on are dropped, so
+  that each wavelength comes from one detector, as for EnMAP.
+- Aerosol LUT: radiances interpolated in wavelength quadratically in log-log (power law of the wavelength) instead
+  of linear space (leave-one-out on the OSOAA LUT: ~1 % error instead of ~10 % in the visible).
+- OmniCloudMask: NIR input at 865 nm instead of 940 nm, outside the water vapour absorption.
+
 ## [2.0.0] - 2026-11-13
 
 ### Added

@@ -330,6 +330,17 @@ def coarsen_mean(ds, xcoarsen, ycoarsen):
     return out[list(ds.data_vars)]
 
 
+def _interp_wl_loglog(da, wl, method='quadratic'):
+    '''Interpolation of a radiance table in wavelength, in log(value) vs log(wavelength); non-positive values
+    fall back to the interpolation in linear space. Output coordinates as ``da.interp(wl=wl)``.'''
+    with np.errstate(divide='ignore', invalid='ignore'):
+        log = np.log(da).assign_coords(wl=np.log(da.wl))
+        out = np.exp(log.interp(wl=np.log(wl), method=method))
+    if not isinstance(wl, xr.DataArray):
+        out = out.assign_coords(wl=np.asarray(wl))
+    return out.fillna(da.interp(wl=wl, method=method))
+
+
 class Product():
     r'''
     Hyperspectral L1C image prepared for hGRS: spectral and processing parameters, auxiliary data and
@@ -1844,8 +1855,14 @@ class Aerosol(Solver):
             .interp(vza=vza, azi=raa_lut, method='linear')
             .interp(sza=sza, method='quadratic').squeeze()
         )
+        if behavior.PREVIOUS_BEHAVIOR:
+            norm_radiance = norm_radiance.interp(wl=wl, method="quadratic")
+        else:
+            # radiances vary as a power law of the wavelength: quadratic in log-log on the coarse LUT grid
+            # (leave-one-out on the OSOAA LUT: ~1 % error instead of ~10 % in the visible)
+            norm_radiance = _interp_wl_loglog(norm_radiance, wl)
         self.Rtoa_lut = (
-            norm_radiance.interp(wl=wl, method="quadratic")
+            norm_radiance
             .interp(aot_ref=aot_refs, method='quadratic')
             .dropna('aot_ref') / np.cos(np.radians(sza))
         )
