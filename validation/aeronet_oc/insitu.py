@@ -5,7 +5,10 @@ netCDF products of ``HGRS_VAL_AERONET/db``). Writes ``OUT_DIR/aeronet_at_overpas
 ``matchup``, ``wl_aeronet``):
 
 * ``Rrs = Lwn_f/Q / F0`` (sr-1), F0 of Thuillier et al. (2003) averaged over 10 nm (Gaussian) at the exact
-  wavelength of the band (``Rrs_Lwn_fQ`` of the database),
+  wavelength of the band (``Rrs_Lwn_fQ`` of the database): fully normalized (nadir view, Sun at zenith, Morel
+  et al. 2002 f/Q, applied by AERONET-OC up to 667 nm at marine sites, 709 nm at lakes);
+* ``Rrs_Lwn = Lwn / F0`` (no f/Q correction) and ``Rrs_IOP = Lwn_IOP / F0`` (IOP-based correction of Lee et al.
+  2011), for the comparison with the directional Rrs of hGRS (see ``HGRS_VAL_INSITU`` in ``compare.py``),
 * ``aot`` spectrum, ``aot550``, ``aot865``, ``ang_exp`` (log-log interpolation),
 * ``tcwv``, ``tco3``, ``tcno2`` (kg m-2), ``pressure`` (hPa), ``wind`` (m s-1), ``chl`` (mg m-3), ``sza_aeronet``,
   ``n_records`` and ``lag_min`` (time difference of the records to the overpass).
@@ -63,6 +66,8 @@ def main():
             continue
         wl = s.wl.values
         rrs, aot = s.Rrs_Lwn_fQ.values, s.aot.values
+        rrs_lwn = s.Rrs_Lwn.values if 'Rrs_Lwn' in s else np.full_like(rrs, np.nan)
+        rrs_iop = s.Rrs_Lwn_IOP.values if 'Rrs_Lwn_IOP' in s else np.full_like(rrs, np.nan)
         scalar = lambda name: float(s[name]) if name in s else np.nan
         rows.append(dict(matchup=f'{r.product}__{r.site}', site=r.site, level=r.level, time=r.time,
                          n_records=int(s.n_records), lag_min=float(s.lag_min),
@@ -72,19 +77,21 @@ def main():
                          aot550=loglog(wl, aot, 550.), aot865=loglog(wl, aot, 865.)))
         rows[-1]['ang_exp'] = (-np.log(rows[-1]['aot550'] / rows[-1]['aot865']) / np.log(550 / 865.)
                                if rows[-1]['aot865'] > 0 else np.nan)
-        spectra.append((pd.Series(rrs, index=wl), pd.Series(aot, index=wl)))
+        spectra.append((pd.Series(rrs, index=wl), pd.Series(aot, index=wl), pd.Series(rrs_lwn, index=wl),
+                        pd.Series(rrs_iop, index=wl)))
     tab = pd.DataFrame(rows).set_index('matchup')
     ds = tab.to_xarray()
     wl_all = np.unique(np.concatenate([s[0].index.values for s in spectra]))
-    rrs = np.full((len(rows), wl_all.size), np.nan)
-    aot = np.full((len(rows), wl_all.size), np.nan)
-    for i, (r_, a_) in enumerate(spectra):
-        rrs[i, np.searchsorted(wl_all, r_.index.values)] = r_.values
-        aot[i, np.searchsorted(wl_all, a_.index.values)] = a_.values
-    ds['Rrs'] = (('matchup', 'wl_aeronet'), rrs)
-    ds['aot'] = (('matchup', 'wl_aeronet'), aot)
+    arrays = [np.full((len(rows), wl_all.size), np.nan) for _ in range(4)]
+    for i, series in enumerate(spectra):
+        for arr, sr in zip(arrays, series):
+            arr[i, np.searchsorted(wl_all, sr.index.values)] = sr.values
+    for name, arr in zip(('Rrs', 'aot', 'Rrs_Lwn', 'Rrs_IOP'), arrays):
+        ds[name] = (('matchup', 'wl_aeronet'), arr)
     ds = ds.assign_coords(wl_aeronet=wl_all)
     ds['Rrs'].attrs.update(units='sr-1', description='Lwn_f/Q / F0 (Thuillier 2003, 10 nm, exact band wavelength)')
+    ds['Rrs_Lwn'].attrs.update(units='sr-1', description='Lwn / F0, no f/Q (bidirectional) correction')
+    ds['Rrs_IOP'].attrs.update(units='sr-1', description='Lwn_IOP / F0, IOP-based bidirectional correction (Lee 2011)')
     for v, u in [('tcwv', 'kg m-2'), ('tco3', 'kg m-2'), ('tcno2', 'kg m-2'), ('pressure', 'hPa')]:
         ds[v].attrs['units'] = u
     ds.attrs['lag_max_min'] = LAG.total_seconds() / 60

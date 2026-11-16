@@ -7,9 +7,18 @@ Comparison of the hGRS versions with AERONET-OC (``aeronet_at_overpass.nc`` and 
 * band depth of Rrs in the absorption bands (Rrs of the band minus the linear continuum of its neighbours), at the
   station and for the darkest water pixels of the crop: a correct gaseous correction gives a smooth spectrum.
 
-Only the matchups processed by all the versions and passing the quality checks (``QC``) are compared. AERONET-OC
-Rrs below ``QC['rrs_min']`` (-0.005 sr-1) are not physical (a few values of -0.04 to -0.14 sr-1 at 779-1020 nm,
-far from the noise of clear water, within 3e-4 sr-1 of 0) and are set to NaN (band left out of the matchup).
+Only the matchups processed by all the versions and passing the quality checks (``QC``) are compared:
+at least ``n_pix_min`` water pixels of the 5 x 5 core, coefficient of variation at 560 nm <= ``cv_max`` (0.20,
+Zibordi et al. 2009, 2012; Bailey & Werdell 2006 use 0.15), AERONET-OC records within ``lag_max`` minutes and solar
+zenith angle <= ``sza_max`` (75 deg, Bailey & Werdell 2006). AERONET-OC Rrs below ``QC['rrs_min']`` (-0.005 sr-1)
+are not physical and are set to NaN (band left out of the matchup); the former -0.04 to -0.14 sr-1 at 779-1020 nm
+were the -9.999 fill value of AERONET read as data, fixed in ``aeronet_oc_db``.
+
+In situ reference (``HGRS_VAL_INSITU``): ``fQ`` (default, ``Lwn_f/Q``: normalized to nadir view and Sun at
+zenith), ``Lwn`` (no f/Q correction) or ``IOP`` (``Lwn_IOP``). hGRS Rrs are directional (geometry of the
+overpass, no BRDF correction), so none is exactly consistent: the difference between ``fQ`` and ``Lwn`` gives the
+size of the bidirectional effect (up to ~10-15 % at 560 nm for large sun zenith angles, Zibordi et al. 2021).
+The outputs of a reference other than ``fQ`` are suffixed with it (e.g. ``stats_rrs_Lwn.csv``).
 When DLR has processed a scene several times, only the latest processing is kept (``latest_processing``), so that
 each overpass counts once.
 Writes ``OUT_DIR/compare/`` : ``matchups_<version>.nc`` (matchup x AERONET band), ``stats_rrs.csv``,
@@ -17,6 +26,7 @@ Writes ``OUT_DIR/compare/`` : ``matchups_<version>.nc`` (matchup x AERONET band)
 
 Usage: python compare.py version [version ...]
 '''
+import os
 import re
 import sys
 import warnings
@@ -33,13 +43,19 @@ CMP = OUT_DIR / 'compare'
 # band, left and right neighbours (nm): O2-B, H2O 720, O2-A, H2O 820, H2O 940, H2O 1130, O2 1270
 DEPTHS = [(687.0, 679.7, 699.8), (720.5, 706.6, 741.8), (763.7, 749.1, 778.6), (816.6, 778.6, 863.7),
           (941.2, 887.7, 993.1), (1135., 1050., 1240.), (1268., 1240., 1290.)]
-QC = dict(n_pix_min=13, cv_max=0.25, lag_max=60., rrs_min=-0.005)
+QC = dict(n_pix_min=13, cv_max=0.20, lag_max=60., sza_max=75., rrs_min=-0.005)
+INSITU = os.environ.get('HGRS_VAL_INSITU', 'fQ')
+INSITU_VAR = {'fQ': 'Rrs', 'Lwn': 'Rrs_Lwn', 'IOP': 'Rrs_IOP'}[INSITU]
+SUFFIX = '' if INSITU == 'fQ' else f'_{INSITU}'
 
 
 def valid_aeronet(aer):
     '''AERONET-OC data with the non-physical Rrs (< QC['rrs_min']) set to NaN; number of values removed'''
-    bad = aer.Rrs < QC['rrs_min']
-    return aer.assign(Rrs=aer.Rrs.where(~bad)), int(bad.sum())
+    if INSITU_VAR not in aer:
+        sys.exit(f'{INSITU_VAR} not in aeronet_at_overpass.nc: run insitu.py again')
+    rrs = aer[INSITU_VAR]
+    bad = rrs < QC['rrs_min']
+    return aer.assign(Rrs=rrs.where(~bad)), int(bad.sum())
 
 
 # EnMAP product: scene (datatake, start time, tile) and DLR processing time
@@ -125,9 +141,15 @@ def stats(x, y):
         return dict(N=0)
     d = y - x
     # correlation and slope from 3 matchups (a single matchup still gives the differences)
+    # ACIX metrics (Pahlevan et al. 2021, Giardino et al. 2025; Morley et al. 2018) on the positive pairs:
+    # eps = median symmetric accuracy, beta = symmetric signed percentage bias (%)
+    pos = (x > 0) & (y > 0)
+    q = np.log(y[pos] / x[pos])
+    eps = float(100 * (np.exp(np.median(np.abs(q))) - 1)) if q.size else np.nan
+    beta = float(100 * np.sign(np.median(q)) * (np.exp(np.abs(np.median(q))) - 1)) if q.size else np.nan
     return dict(N=n, bias=float(np.median(d)), mad=float(np.median(np.abs(d))),
                 rmsd=float(np.sqrt(np.mean(d ** 2))),
-                mapd=float(100 * np.median(np.abs(d) / np.abs(x))),
+                mapd=float(100 * np.median(np.abs(d) / np.abs(x))), eps=eps, beta=beta,
                 r=float(np.corrcoef(x, y)[0, 1]) if n >= 3 else np.nan,
                 slope=float(np.polyfit(x, y, 1)[0]) if n >= 3 else np.nan)
 
@@ -148,16 +170,17 @@ def main(versions):
     cv = (d0.Rrs_std / d0.Rrs).sel(wl=560, method='nearest')
     ok = (d0.n_pix >= QC['n_pix_min']) & (np.abs(cv) <= QC['cv_max'])
     ok &= (aer.lag_min.sel(matchup=common) <= QC['lag_max'])
+    ok &= (aer.sza_aeronet.sel(matchup=common) <= QC['sza_max'])
     keep = [m for m, k in zip(common, ok.values) if k]
-    print(f'{len(common)} matchups, {len(keep)} pass the quality checks')
-    pd.Series(keep).to_csv(CMP / 'matchups_qc.csv', index=False, header=['matchup'])
+    print(f'{len(common)} matchups, {len(keep)} pass the quality checks {QC}; in situ reference: {INSITU}')
+    pd.Series(keep).to_csv(CMP / f'matchups_qc{SUFFIX}.csv', index=False, header=['matchup'])
     a = aer.sel(matchup=keep)
     srows, prows, drows = [], [], []
     for v, d in data.items():
         d = d.sel(matchup=keep)
         sat = to_aeronet_bands(d.Rrs, wl_aer)
         xr.Dataset(dict(Rrs_aeronet=a.Rrs, Rrs_enmap=sat, aot_aeronet=a.aot550, aot_enmap=d.aot_ref,
-                        tcwv_aeronet=a.tcwv, tcwv_enmap=d.tcwv, site=a.site)).to_netcdf(CMP / f'matchups_{v}.nc')
+                        tcwv_aeronet=a.tcwv, tcwv_enmap=d.tcwv, site=a.site)).to_netcdf(CMP / f'matchups_{v}{SUFFIX}.nc')
         for w in wl_aer:
             s = stats(a.Rrs.sel(wl_aeronet=w).values, sat.sel(wl_aeronet=w).values)
             srows.append(dict(version=v, wl=w, **s))
@@ -171,13 +194,13 @@ def main(versions):
     srr = pd.DataFrame(srows)
     spa = pd.DataFrame(prows)
     sbd = pd.DataFrame(drows)
-    srr.to_csv(CMP / 'stats_rrs.csv', index=False, float_format='%.6g')
-    spa.to_csv(CMP / 'stats_params.csv', index=False, float_format='%.6g')
-    sbd.to_csv(CMP / 'band_depth.csv', index=False, float_format='%.6g')
+    srr.to_csv(CMP / f'stats_rrs{SUFFIX}.csv', index=False, float_format='%.6g')
+    spa.to_csv(CMP / f'stats_params{SUFFIX}.csv', index=False, float_format='%.6g')
+    sbd.to_csv(CMP / f'band_depth{SUFFIX}.csv', index=False, float_format='%.6g')
     pd.set_option('display.width', 200)
-    for col in ('bias', 'rmsd', 'mapd'):
+    for col in ('bias', 'rmsd', 'mapd', 'eps', 'beta'):
         print(f'\nRrs {col}')
-        print(srr.pivot(index='wl', columns='version', values=col)[versions].round(5 if col != 'mapd' else 1)
+        print(srr.pivot(index='wl', columns='version', values=col)[versions].round(5 if col in ('bias', 'rmsd') else 1)
               .to_string())
     print(srr.pivot(index='wl', columns='version', values='N')[versions].iloc[:, 0].to_string())
     print('\nparameters')
