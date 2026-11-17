@@ -58,6 +58,23 @@ Atmospheric and sunglint correction
    hgrs.hgrs_kernel.Aerosol
    hgrs.hgrs_kernel.Solver
 
+Gaseous transmittance of the terms of the signal (:py:mod:`hgrs.gas_coupling`):
+
+.. autosummary::
+   :toctree: generated
+   :template: autosummary/class.rst
+   :nosignatures:
+
+   hgrs.gas_coupling.GasTransmittance
+   hgrs.gas_coupling.PathLengthCoupling
+   hgrs.gas_coupling.O2LineByLine
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+   hgrs.gas_coupling.path_length_transmittance
+
 Configuration
 -------------
 

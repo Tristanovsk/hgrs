@@ -235,9 +235,8 @@ class Gaussian(GenericSpecSen):
         wl_ref = signal[dim].values
         for ii in range(self.number_bands):
             fwhm = self.fwhm[ii]
-            sigma = fwhm * np.sqrt(2.) / (
-                np.sqrt(2. * np.log(2.)) * 2.
-            )
+            # FWHM -> sigma of the band (FWHM / 2.3548; sqrt(2) wider, i.e. 0.6006 FWHM, with PREVIOUS_BEHAVIOR)
+            sigma = gaussian_fwhm_to_sigma(fwhm)
             rsr = 1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(
                 -(wl_ref - self.wls[ii]) ** 2 / (2 * sigma ** 2)
             )

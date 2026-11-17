@@ -17,6 +17,7 @@ from multiprocessing import Pool
 import hgrs
 from hgrs.drivers import get_driver, driver_for_platform
 from hgrs.config import behavior, get_app_config
+from hgrs.hgrs_kernel import set_nan_inplace
 
 opj = os.path.join
 logger = logging.getLogger(__name__)
@@ -305,9 +306,12 @@ class Process():
         logger.info('Apply omnicloudmask')
         red_index = 670
         green_index = 550
-        nir_index = 940
+        # NIR band(s) of OmniCloudMask: run with 865 nm (as Sentinel-2 B8/B8A of its training) and with 940 nm,
+        # masked only where both agree; each alone has false detections over water (865 nm: clear dark water
+        # flagged as thin cloud; 940 nm: shadows, input depending on the water vapour)
+        nir_indices = [940] if behavior.PREVIOUS_BEHAVIOR else [865, 940]
         rgnir = prod.raster.Rtoa.sel(
-            wl=[red_index, green_index, nir_index], method='nearest'
+            wl=[red_index, green_index, *nir_indices], method='nearest'
         ).fillna(0)
         omnimask = prod.get_omnicloudmask(rgnir)
         # OmniCloudMask classes 1 and 2 are thick/thin cloud; class 3 is
@@ -321,7 +325,7 @@ class Process():
         prod.apply_water_masks()
         # Evaluate spectral water tests on the original Rtoa values so a cloud
         # classification does not change the independent water-mask meaning.
-        prod.raster['Rtoa'] = prod.raster['Rtoa'].where(omnimask == 0)
+        prod.raster['Rtoa'] = set_nan_inplace(prod.raster['Rtoa'], omnimask != 0)
         # Keep the non-land-masked radiance for full-resolution correction;
         # the land mask is only used to select pixels for retrievals.
         if driver.sensor_description.name == "PRISMA":
@@ -353,6 +357,8 @@ class Process():
         wv_retrieval = hgrs.WaterVapor(prod)
         wv_retrieval.solve(pool=pool)
         prod.get_wv_transmittance_raster(wv_retrieval.water_vapor)
+        # coupled gaseous transmittance (gas_coupling: path_length), first-guess AOT for the aerosol retrieval
+        prod.get_coupling_factors(wv_retrieval.water_vapor, prod.aerosol_parameters.aod550_initial)
         prod.water_vapor_correction()
         logger.info('mask bands where gaseous abs. is too strong')
         Tg_tot = prod.Tg_other * prod.Twv_raster.mean(['x', 'y'])
@@ -368,9 +374,16 @@ class Process():
         prod.coarse_masked_raster = prod.remove_wl_dataset(
             prod.coarse_masked_raster, prod.wl_to_remove, variable=variable)
 
-        # remove bands where Tg is below a threshold (typically Tg < 0.5)
-        prod.coarse_masked_raster[variable] = prod.coarse_masked_raster[variable].where(Tg_tot > 0.5, drop=True)
-        prod.raster[variable] = prod.raster[variable].where(Tg_tot > 0.5, drop=True)
+        # set to NaN the bands where Tg is below a threshold (typically Tg < 0.5), or not computed, in place:
+        # as `where(Tg_tot > 0.5, drop=True)` assigned back to the dataset (the bands are kept, NaN), without
+        # its copies of the cube
+        for raster in (prod.coarse_masked_raster, prod.raster):
+            data = raster[variable]
+            bad = ~(Tg_tot > 0.5).reindex(wl=data.wl, fill_value=False).values
+            if isinstance(data.data, np.ndarray) and data.dims[0] == 'wl':
+                data.values[bad] = np.nan
+            else:
+                raster[variable] = data.where(~xr.DataArray(bad, coords=dict(wl=data.wl), dims='wl'))
 
         aerosol_state = prod.aerosol_parameters
         self.aerosol_parameters = aerosol_state
@@ -378,6 +391,10 @@ class Process():
         aero_retrieval.solve(pool=pool)
         aero_retrieval.get_atmo_parameters(prod)
         self.aero_retrieval = aero_retrieval
+        # coupled gaseous transmittance with the retrieved AOT (scene mean)
+        aot550_scene = float(aero_retrieval.aero_img.aot_ref.mean())
+        if np.isfinite(aot550_scene):
+            prod.get_coupling_factors(wv_retrieval.water_vapor, aot550_scene)
 
         # ------------------------------------------
         # full resolution processing
@@ -417,6 +434,11 @@ class Process():
 
         Rdiff = full_resolution_blocks(aero_retrieval.atmo_img.Rtoa_diff)
         Tdir = full_resolution_blocks(aero_retrieval.atmo_img.Tdir)
+        # coupled gaseous transmittance: path reflectance x f_path, water-leaving signal x f_w (1 if decoupled)
+        coupled = prod.f_path_raster is not None
+        if coupled:
+            f_path = full_resolution_blocks(prod.f_path_raster)
+            f_w = full_resolution_blocks(prod.f_w_raster)
         sunglint_eps = aero_retrieval.sunglint_eps.sel(wl=wl).values[:, None, None]
         sunglint = np.isin(wl, wl.sel(wl=prod.water_parameters.wl_sunglint))
         logger.info('Begin aerosol correction and sunglint removal')
@@ -425,7 +447,10 @@ class Process():
         BRDF_sunglint = np.full((height, width), np.nan, dtype=np.float32)
 
         for block in blocks:
-            Rcorr = Rtoa[(slice(None), *block)] - Rdiff(*block)
+            if coupled:
+                Rcorr = Rtoa[(slice(None), *block)] - f_path(*block) * Rdiff(*block)
+            else:
+                Rcorr = Rtoa[(slice(None), *block)] - Rdiff(*block)
             Tdir_ = Tdir(*block)
 
             # BRDF: mean of the sunglint bands, skipping NaN
@@ -435,7 +460,10 @@ class Process():
                 BRDF_sunglint[block] = np.where(valid, brdf, 0).sum(axis=0) / valid.sum(axis=0)
 
             Rdir = Tdir_ * sunglint_eps * BRDF_sunglint[block]
-            Rrs[(slice(None), *block)] = (Rcorr - Rdir) / np.pi
+            if coupled:
+                Rrs[(slice(None), *block)] = (Rcorr - Rdir) * f_w(*block) / np.pi
+            else:
+                Rrs[(slice(None), *block)] = (Rcorr - Rdir) / np.pi
 
         l2_prod = xr.Dataset(dict(Rrs=(["wl", "y", "x"], Rrs),
                                   brdfg_full=(["y", "x"], BRDF_sunglint), ),
@@ -498,6 +526,15 @@ class Process():
                 Ttot_by_aot = Ttot_by_aot.assign_coords(aot_ref=aot_values)
                 Ttot = Ttot_by_aot.sel(aot_ref=aot_field.round(3), method='nearest')
                 Ttot = Ttot.drop_vars('aot_ref', errors='ignore').where(valid_aot)
+        if not behavior.PREVIOUS_BEHAVIOR:
+            # diffuse transmittances at the surface pressure (the LUTs are computed for 1015.2 hPa): half of the change
+            # of the Rayleigh scattering lost for the direct beam, exp(-dtau_r (1 / 2 mu_s + 1 / 2 mu_v))
+            from .hgrs_kernel import LUT_PRESSURE
+            rot = prod.auxdata.rot.interp(wl=wl)
+            dtau = rot * (float(prod.pressure) - LUT_PRESSURE) / prod.auxdata.pressure_rot_ref
+            mu = 0.5 / np.cos(np.radians(sza)) + 0.5 / np.cos(np.radians(vza))
+            factor = xr.DataArray(np.exp(-np.asarray(dtau) * mu), coords={'wl': wl}, dims='wl')
+            Ttot = (Ttot * factor).transpose(*Ttot.dims)
         if 'x' in Ttot.dims:
             # transmittance on the coarse grid, interpolated and applied by blocks (in place, float32):
             # a full-resolution transmittance cube would double the memory of Rrs

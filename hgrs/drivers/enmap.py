@@ -13,10 +13,68 @@ from scipy.interpolate import RegularGridInterpolator
 from ..auxdata import SolarIrradiance
 from ..utils import Misc
 from ..spectral_sensitivity import Gaussian
-from ..config import SensorDescription
+from ..config import SensorDescription, behavior
 from .base import L1Driver
 
 logger = logging.getLogger(__name__)
+
+DETECTOR_OFFSETS = ('none', 'swir_ramp', 'vnir_ramp')
+# wavelengths (nm): VNIR band of the offset estimate, end of the SWIR ramp, start of the VNIR ramp
+OFFSET_WL, SWIR_RAMP_END, VNIR_RAMP_START = 990., 2200., 700.
+MIN_WATER_PIXELS = 1000
+
+
+def detector_offset(rtoa, vnir_idx, swir_idx, mode):
+    r'''
+    Correction of the radiometric mismatch of the EnMAP VNIR and SWIR detectors.
+
+    The offset :math:`\delta = R_{SWIR}(\lambda_0) - R_{VNIR}(\lambda_0)` is the median over the water pixels of the
+    scene (:math:`R_{1650} < 0.02` and :math:`R_{560} > 3 R_{1650}`) at the VNIR band :math:`\lambda_0` nearest to
+    990 nm, the SWIR reflectance being interpolated linearly to :math:`\lambda_0` in each pixel. Then:
+
+    * ``'swir_ramp'``: :math:`R_{SWIR}(\lambda) - \delta\, w(\lambda)`, with :math:`w` = 1 up to :math:`\lambda_0`
+      and decreasing linearly to 0 at 2200 nm (a constant offset would make the water reflectance negative at
+      2200 nm);
+    * ``'vnir_ramp'``: :math:`R_{VNIR}(\lambda) + \delta\, w(\lambda)`, with :math:`w` = 0 up to 700 nm and
+      increasing linearly to 1 at :math:`\lambda_0`.
+
+    :param rtoa: TOA reflectance (wl, y, x), all the bands (lazy with dask)
+    :param vnir_idx, swir_idx: indices of the bands of each detector
+    :param mode: ``'swir_ramp'`` or ``'vnir_ramp'``
+    :return: corrected reflectance (lazy if ``rtoa`` is) and :math:`\delta` (NaN, and no correction, with fewer
+        than 1000 water pixels)
+    '''
+    if mode not in DETECTOR_OFFSETS[1:]:
+        raise ValueError(f'enmap_detector_offset must be one of {DETECTOR_OFFSETS}, not {mode!r}')
+    wl = rtoa.wl.values
+    vnir_idx, swir_idx = np.asarray(vnir_idx), np.asarray(swir_idx)
+    wl_swir = wl[swir_idx]
+    i0 = vnir_idx[np.argmin(np.abs(wl[vnir_idx] - OFFSET_WL))]
+    wl0 = wl[i0]
+    k = np.searchsorted(wl_swir, wl0)
+    ia, ib = swir_idx[k - 1], swir_idx[k]
+    i560 = int(np.argmin(np.abs(wl - 560)))
+    i1650 = swir_idx[np.argmin(np.abs(wl_swir - 1650))]
+    bands = rtoa.isel(wl=[i0, ia, ib, i560, i1650]).values
+    r0, ra, rb, r560, r1650 = bands
+    water = (r1650 < 0.02) & (r560 > 3 * r1650)
+    t = (wl0 - wl[ia]) / (wl[ib] - wl[ia])
+    delta = (1 - t) * ra + t * rb - r0
+    delta = float(np.nanmedian(delta[water])) if water.sum() >= MIN_WATER_PIXELS else np.nan
+    if not np.isfinite(delta):
+        logger.warning('detector offset: fewer than %d water pixels, no correction', MIN_WATER_PIXELS)
+        return rtoa, np.nan
+    weight = np.zeros(wl.size)
+    if mode == 'swir_ramp':
+        weight[swir_idx] = np.clip((SWIR_RAMP_END - wl_swir) / (SWIR_RAMP_END - wl0), 0, 1)
+        sign = -1.
+    else:
+        weight[vnir_idx] = np.clip((wl[vnir_idx] - VNIR_RAMP_START) / (wl0 - VNIR_RAMP_START), 0, 1)
+        sign = 1.
+    logger.info('detector offset: SWIR - VNIR = %.5f at %.1f nm over %d water pixels, %s', delta, wl0,
+                int(water.sum()), mode)
+    correction = xr.DataArray(sign * delta * weight, coords={'wl': wl}, dims='wl')
+    return (rtoa + correction).assign_attrs(rtoa.attrs), delta
 
 
 class EnmapDriver(L1Driver):
@@ -110,6 +168,9 @@ class EnmapDriver(L1Driver):
 
         date_str = specific.findtext('datatakeStart').strip().replace("Z", "")
 
+        # GDAL block cache: 5 % of the RAM by default, ~1 GB more resident memory for no gain here (the
+        # image is read once); kept if set by the user
+        os.environ.setdefault('GDAL_CACHEMAX', '256')
         # open raster: the GeoTIFF is band interleaved, in strips of full rows, so one chunk per 8 bands
         # on the whole image; lock=False decompresses the chunks in parallel (one file handle per thread)
         data = rxr.open_rasterio(l1c_raster_path, chunks={'x': -1, 'y': -1, 'band': 8}, lock=False,
@@ -187,13 +248,15 @@ class EnmapDriver(L1Driver):
         F0 = F0 * D2
         self.F0 = F0
 
-        # Preserve the established EnMAP two-stage irradiance resampling.
         self.sensor_description = SensorDescription(
             name='EnMAP',
             sensor_mod=Gaussian(data.wl.values, data.fwhm.values),
 
         )
-        F0 = self.sensor_description.convolve(F0).rename({'wl_sensor': 'wl'})
+        if behavior.PREVIOUS_BEHAVIOR:
+            # former two-stage resampling: F0 convolved to the bands, then convolved again below (the band
+            # response applied twice, up to ~2.7 % error on F0 near the Fraunhofer lines)
+            F0 = self.sensor_description.convolve(F0).rename({'wl_sensor': 'wl'})
 
         # Apply the same sensor response operator used later in atmospheric correction.
         F0_sensor = self.sensor_description.convolve(
@@ -238,6 +301,15 @@ class EnmapDriver(L1Driver):
         params = ['sza', 'vza', 'raa', 'saa', 'vaa']
         for i in range(len(params)):
             data[params[i]] = data[params[i]].where(data.Rtoa.isel(wl=0) > 0)
+
+        # radiometric mismatch of the VNIR and SWIR detectors (setting enmap_detector_offset), estimated on the
+        # whole scene before the bands of the overlap are removed
+        if reflectance_unit:
+            from ..config import get_app_config
+            mode = get_app_config().atmospheric_correction.product.enmap_detector_offset
+            if mode != 'none':
+                data['Rtoa'], data.attrs['detector_offset_990'] = detector_offset(
+                    data.Rtoa, self.vnir_idx, self.swir_idx, mode)
 
         wl_vnir = data.wl.isel(wl=self.vnir_idx).values
         wl_swir = data.wl.isel(wl=self.swir_idx).values

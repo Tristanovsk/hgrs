@@ -37,7 +37,7 @@ Notation
      - sunglint amplitude, i.e. the sunglint reflectance normalized by its spectral shape
        (``brdfg``)
    * - :math:`\Lambda_{wv},\ \Lambda_g,\ \Lambda_a,\ \Lambda_+`
-     - wavelength sets used for water vapor (800-1300 nm, ``wl_water_vapor``), sunglint
+     - wavelength sets used for water vapor (931-1060 nm, ``wl_water_vapor``), sunglint
        (2150-2250 nm, ``wl_sunglint``), aerosol fit (``wl_atmo``) and non-negativity constraint
        (``wl_non_neg``)
 
@@ -149,6 +149,22 @@ that is, the water-leaving reflectance must stay non-negative in the visible and
 :math:`\Lambda_+`. :math:`\tau_{ref}` is bounded by the CAMS values (see
 :py:meth:`hgrs.hgrs_process.Process.execute`) and :math:`B \in [0, 1.3]`.
 
+Over very dark water the constraint can be infeasible for every :math:`\tau_{ref}` (e.g. EnMAP, whose VNIR
+reflectance can fall below the Rayleigh reflectance in the near infrared): the fit then ends at the lower
+bound of :math:`\tau_{ref}`. The settings ``aerosol: prior`` and ``nonnegativity`` (experimental, off by
+default) replace the fit by the minimization of (:py:meth:`AerosolModel.cost_regularized`)
+
+.. math::
+
+   J = \sum_{\lambda \in \Lambda_a} \left[\frac{R - R_{sim}}{\sigma_R}\right]^2
+     + \left[\frac{\tau_{ref} - \bar\tau_{CAMS}}{\sigma_{CAMS}}\right]^2
+     + \sum_{\lambda \in \Lambda_+} \left[\frac{\min(0,\, R - R_{sim})}{\sigma_+}\right]^2
+
+with the CAMS prior (``prior: cams``, :math:`\sigma_{CAMS}` as for the bounds) and the non-negativity as a
+one-sided penalty (``nonnegativity: soft``, :math:`\sigma_+` = ``nonnegativity_sigma``) instead of the hard
+constraint; :math:`\sigma_R` = ``reflectance_sigma``. A prior alone has no effect where the hard constraint is
+infeasible. With ``nonnegativity: soft`` the retrieved :math:`R_{rs}` can be negative in :math:`\Lambda_+`.
+
 Remote-sensing reflectance
 --------------------------
 
@@ -220,11 +236,12 @@ algorithm [Harmel2018]_. The optimizations use the trust-region reflective metho
 '''
 
 import os
+import warnings
 
 import numpy as np
 import pandas as pd
 import xarray as xr
-import dask
+import dask.array
 
 from numba import jit
 from scipy import ndimage
@@ -242,6 +259,7 @@ from omnicloudmask import predict_from_array
 from . import AuxData
 from .config import behavior
 from .lut_tables import LUTTables
+from .gas_coupling import GasTransmittance
 from .spectral_sensitivity import SuperGaussian
 from .config import (
     AerosolParameters,
@@ -253,6 +271,101 @@ from .config import (
 )
 opj = os.path.join
 logger = logging.getLogger(__name__)
+
+
+def load_into_array(xarr):
+    '''
+    ``xarr`` with its data in memory. A dask array is computed into one preallocated numpy array
+    (:py:func:`dask.array.store`): ``compute`` would hold the chunks and their concatenation at once,
+    twice the memory of the result.
+    '''
+    if isinstance(xarr.data, np.ndarray):
+        return xarr
+    values = np.empty(xarr.shape, dtype=xarr.dtype)
+    dask.array.store(xarr.data, values, lock=False)
+    return xarr.copy(data=values)
+
+
+def set_nan_inplace(xarr, mask):
+    '''
+    Set ``xarr`` (numpy data, ``y`` and ``x`` last dimensions) to NaN where the (y, x) ``mask`` is True, in
+    place, as ``xarr.where(~mask)`` without a copy of the array. Other layouts: ``where``, returned.
+    '''
+    if not (isinstance(xarr.data, np.ndarray) and xarr.dims[-2:] == ('y', 'x')):
+        return xarr.where(~mask)
+    xarr.values[..., np.asarray(mask.transpose('y', 'x').values, dtype=bool)] = np.nan
+    return xarr
+
+
+def coarsen_mean(ds, xcoarsen, ycoarsen):
+    '''
+    ``ds.coarsen(x=xcoarsen, y=ycoarsen, boundary='pad').mean()`` (NaN skipped), computed by strips of
+    ``ycoarsen`` rows for the in-memory variables with ``y`` and ``x`` as last dimensions: the padded
+    reshape of xarray copies a whole cube several times. Same values, same coordinates.
+    '''
+    ny, nx = ds.sizes['y'], ds.sizes['x']
+    nyc, nxc = -(-ny // ycoarsen), -(-nx // xcoarsen)
+    by_strip = [name for name, v in ds.data_vars.items()
+                if isinstance(v.data, np.ndarray) and v.dims[-2:] == ('y', 'x') and v.dtype.kind == 'f']
+    out = ds.drop_vars(by_strip).coarsen(x=xcoarsen, y=ycoarsen, boundary='pad').mean()
+    # coordinates of the mega-pixels, as given by xarray
+    grid = xr.DataArray(np.zeros((ny, nx), np.float32), coords=dict(y=ds.y, x=ds.x), dims=('y', 'x'))
+    grid = grid.coarsen(x=xcoarsen, y=ycoarsen, boundary='pad').mean()
+    for name in by_strip:
+        v = ds[name]
+        values = v.values
+        lead = values.shape[:-2]
+        result = np.empty(lead + (nyc, nxc), dtype=values.dtype)
+        for j in range(nyc):
+            strip = values[..., j * ycoarsen:(j + 1) * ycoarsen, :]
+            pad_y, pad_x = ycoarsen - strip.shape[-2], nxc * xcoarsen - nx
+            if pad_y or pad_x:
+                strip = np.pad(strip, [(0, 0)] * len(lead) + [(0, pad_y), (0, pad_x)], constant_values=np.nan)
+            strip = strip.reshape(lead + (ycoarsen, nxc, xcoarsen))
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', RuntimeWarning)  # mega-pixels without valid pixel
+                result[..., j, :] = np.nanmean(strip, axis=(-3, -1))
+        out[name] = xr.DataArray(result, dims=v.dims, coords={d: v[d] for d in v.dims[:-2] if d in v.coords},
+                                 attrs=v.attrs).assign_coords(y=grid.y, x=grid.x)
+    return out[list(ds.data_vars)]
+
+
+#: pressure (hPa) of the Rayleigh optical thickness of the OSOAA runs of the LUTs (AP.MOT: Bodhaine et al. 1999 at
+#: 1015.2 hPa, e.g. 0.360251 at 400 nm against 0.359559 at 1013.25 hPa)
+LUT_PRESSURE = 1015.2
+
+
+def rayleigh_pressure_delta(Rray, rot_nodes, pressure, wl):
+    r"""
+    Change of the Rayleigh reflectance of the LUT from :math:`P_0` (``LUT_PRESSURE``) to the surface pressure
+    :math:`P`, :math:`\Delta R_{ray} = R_{ray}\left[(P/P_0)^D - 1\right]` with
+    :math:`D = d\ln R_{ray}/d\ln\tau_r` from the wavelength nodes of the LUT (1 in single scattering, ~0.9 at
+    400 nm); validated with OSOAA runs at +/- 20 hPa in radcalnet_oc (scripts/rayleigh_pressure).
+
+    :param Rray: Rayleigh reflectance of the LUT (aot_ref = 0) at the geometry, on the wavelength nodes (``wl``, nm)
+    :param rot_nodes: Rayleigh optical thickness at the nodes (any reference pressure: only its logarithmic
+        variation with the wavelength is used)
+    :param pressure: surface pressure (hPa)
+    :param wl: wavelengths of the output (nm)
+    """
+    with np.errstate(divide='ignore', invalid='ignore'):
+        D = np.gradient(np.log(np.clip(Rray.values, 1e-12, None)), np.log(rot_nodes), axis=Rray.get_axis_num('wl'))
+    D = Rray.copy(data=np.where(np.isfinite(D), D, 1.))
+    D_wl = D.assign_coords(wl=np.log(D.wl)).interp(wl=np.log(np.asarray(wl)), kwargs={'fill_value': 'extrapolate'})
+    D_wl = D_wl.assign_coords(wl=np.asarray(wl))
+    Rray_wl = _interp_wl_loglog(Rray, wl)
+    return Rray_wl * np.expm1(D_wl * np.log(pressure / LUT_PRESSURE))
+
+
+def _interp_wl_loglog(da, wl, method='quadratic'):
+    '''Interpolation of a radiance table in wavelength, in log(value) vs log(wavelength); non-positive values
+    fall back to the interpolation in linear space. Output coordinates as ``da.interp(wl=wl)``.'''
+    with np.errstate(divide='ignore', invalid='ignore'):
+        log = np.log(da).assign_coords(wl=np.log(da.wl))
+        out = np.exp(log.interp(wl=np.log(wl), method=method))
+    if not isinstance(wl, xr.DataArray):
+        out = out.assign_coords(wl=np.asarray(wl))
+    return out.fillna(da.interp(wl=wl, method=method))
 
 
 class Product():
@@ -343,8 +456,20 @@ class Product():
         self.psl = 1013
         self.altitude = 0
         self.coef_abs_scat = product_config.gas_absorption_scattering_coefficient
+        # coupling of the gaseous absorption with the scattering (see hgrs.gas_coupling)
+        self.gas_coupling = product_config.gas_coupling
+        self.o2_model = product_config.o2_model
+        self.gas_coupling_table = getattr(product_config, 'gas_coupling_table', None)
+        self.f_path_raster = None
+        self.f_w_raster = None
+        self.f_path_mean = None
 
         self.raster = l1c_obj.copy()
+        # TOA reflectance in float32 (half the memory of the cubes; Rrs is written in float32), float64 with
+        # the former behavior. Own copy of the data (lazy if dask): Rtoa is then modified in place, which
+        # must not change the L1 product of the caller.
+        dtype = self.raster.Rtoa.dtype if behavior.PREVIOUS_BEHAVIOR else np.float32
+        self.raster['Rtoa'] = self.raster.Rtoa.astype(dtype, copy=True)
 
         # metadata objects
         self.scene_metadata = (
@@ -361,6 +486,10 @@ class Product():
             abs_gas_file=abs_gas_file,
         )
         self.aero_lut = self.lut_tables.aero_lut
+        self.gas_transmittance = GasTransmittance(
+            self.lut_tables.gas_lut, self.coef_abs_scat,
+            coupling=self.gas_coupling, o2_model=self.o2_model, ppld_file=self.gas_coupling_table,
+        )
         self.water_parameters = WaterParameters(
             mask=product_config,
             vapor=self.config.atmospheric_correction.water_vapor,
@@ -476,6 +605,9 @@ class Product():
         Water mask ``water_mask`` from the spectral tests (NDWI, sunglint band level and green-SWIR index,
         thresholds of the configuration), then set ``Rtoa`` to NaN outside the water pixels.
         '''
+        # Rtoa read once into a single array (no concatenation of the chunks), the tests computed on it and
+        # the mask applied in place: one copy of the cube in memory
+        self.raster['Rtoa'] = load_into_array(self.raster.Rtoa)
         green = self.raster.Rtoa.sel(wl=self.water_parameters.wl_green).mean(dim='wl')
         nir = self.raster.Rtoa.sel(wl=self.water_parameters.wl_nir).mean(dim='wl')
         ndwi = (green - nir) / (green + nir)
@@ -489,15 +621,13 @@ class Product():
             & (b2200 < self.water_parameters.mask.sunglint_threshold)
             & (green_swir_index > self.water_parameters.mask.green_swir_index_threshold)
         )
-        # mask and masked Rtoa computed in one pass: the bands of the tests are read once, and the mask
-        # is not left lazy (it would read the image again when the product is written)
-        water_mask, rtoa = dask.compute(water_mask, self.raster.Rtoa.where(water_mask))
+        water_mask = water_mask.compute()
         self.raster['water_mask'] = water_mask.rename('water_mask')
         self.raster['water_mask'].attrs.update(
             long_name='spectral water mask',
             description='True where the pixel passes all configured spectral water tests',
         )
-        self.raster['Rtoa'] = rtoa
+        set_nan_inplace(self.raster.Rtoa, ~water_mask)
 
     def apply_land_mask(self):
         """Mask PRISMA pixels classified as land; leave other sensors unchanged."""
@@ -540,7 +670,12 @@ class Product():
         - 2 = thin cloud
         - 3 = cloud shadow
 
-        :param rgnir: raster xarray object with the red, green and nir bands (in this order)
+        With several NIR bands, OmniCloudMask is run once per NIR band (with the same red and green bands)
+        and a pixel is flagged only where all the runs flag it (any class): each NIR choice has its own false
+        detections over water (865 nm: clear dark water as thin cloud; 940 nm: wrong shadows, depends on the
+        water vapour), and they rarely coincide. The class of a flagged pixel is the one of the first NIR band.
+
+        :param rgnir: raster xarray object with the red, green and one or more nir bands (in this order)
         :return omnimask: raster of the retrieved mask
 
         Examples
@@ -549,7 +684,7 @@ class Product():
 
         .. code-block:: python
 
-           rgnir = prod.raster.Rtoa.sel(wl=[670, 550, 940], method='nearest').fillna(0)
+           rgnir = prod.raster.Rtoa.sel(wl=[670, 550, 865, 940], method='nearest').fillna(0)
            omnimask = prod.get_omnicloudmask(rgnir)
            prod.raster['Rtoa'] = prod.raster['Rtoa'].where(omnimask == 0)
 
@@ -561,15 +696,24 @@ class Product():
           https://doi.org/10.1016/j.rse.2025.114694
         '''
 
-        pred = predict_from_array(rgnir.fillna(0).values)
-        omnimask = xr.DataArray(pred[0],
+        values = rgnir.fillna(0).values
+        if values.shape[0] < 3:
+            raise ValueError('rgnir needs the red, green and at least one nir band')
+        preds = [predict_from_array(values[[0, 1, i]])[0] for i in range(2, values.shape[0])]
+        pred = preds[0]
+        for other in preds[1:]:
+            pred = np.where(other == 0, 0, pred)
+        nir_wl = [float(w) for w in rgnir.wl.values[2:]] if 'wl' in rgnir.coords else []
+        omnimask = xr.DataArray(pred,
                                 dims=["y", "x"],
                                 coords=dict(x=rgnir.x.values,
                                             y=rgnir.y.values,
                                             time=rgnir.time,
                                             ),
                                 attrs=dict(
-                                    description="OmniCloudMask, see https://github.com/DPIRD-DMA/OmniCloudMask",
+                                    description="OmniCloudMask, see https://github.com/DPIRD-DMA/OmniCloudMask; "
+                                                "flagged only where the runs with all the nir bands agree",
+                                    nir_wavelengths=nir_wl,
                                     reference='https://doi.org/10.1016/J.RSE.2025.114694'),
                                 )
         omnimask.name = 'omnimask'
@@ -768,8 +912,7 @@ class Algo(Product):
         are ignored) and count the valid water pixels of each mega-pixel (``water_pixel_number``),
         used to select and weight the mega-pixels in the retrievals.
         '''
-        self.coarse_masked_raster = self.raster[variables].coarsen(x=self.xcoarsen, y=self.ycoarsen,
-                                                                   boundary="pad").mean()
+        self.coarse_masked_raster = coarsen_mean(self.raster[variables], self.xcoarsen, self.ycoarsen)
         self.coarse_masked_raster['water_pixel_number'] = self.raster['Rtoa']. \
             isel(wl=slice(10, 20)).mean(dim='wl'). \
             coarsen(x=self.xcoarsen, y=self.ycoarsen, boundary="pad").count()
@@ -811,8 +954,11 @@ class Algo(Product):
         '''
 
         self.get_gaseous_optical_thickness()
-        Tg = np.exp(- self.air_mass_mean * self.abs_gas_opt_thick)
-
+        if self.o2_model == 'reptran' and self.gas_coupling == 'decoupled':
+            Tg = np.exp(- self.air_mass_mean * self.abs_gas_opt_thick)
+        else:
+            # direct beam with the line-by-line O2 bands (and kappa = 1 in the coupled windows)
+            Tg = self.other_gas_transmittance('dir')
         self.Tg_other = self.sensor_description.convolve(Tg).rename({"wl_sensor": "wl"})
 
         # fwhms = self.raster.fwhm.reset_coords(drop=True).to_dataframe()
@@ -837,7 +983,14 @@ class Algo(Product):
                 return
         if self.Tg_other is None:
             self.get_gaseous_transmittance(self.air_mass_mean)
-        raster[variable] = raster[variable] / self.Tg_other
+        data = raster[variable]
+        if (isinstance(data.data, np.ndarray) and data.dims[0] == 'wl'
+                and np.isin(data.wl.values, self.Tg_other.wl.values).all()):
+            # in place: a new array would double the memory of the full resolution cube
+            tg = self.Tg_other.sel(wl=data.wl.values).values.reshape((-1,) + (1,) * (data.ndim - 1))
+            np.divide(data.values, tg, out=data.values, casting='same_kind')
+        else:
+            raster[variable] = data / self.Tg_other
         raster[variable].attrs['other_gas_correction'] = True
 
     def water_vapor_correction(self,
@@ -873,11 +1026,15 @@ class Algo(Product):
         transmittance LUT. Result in ``Twv_raster``.
 
         :param tcwv_raster: xarray.Dataset with ``tcwv`` (see :py:class:`WaterVapor`)
+        :raises ValueError: if the retrieved water vapor is NaN everywhere
         '''
         tcwv_source = tcwv_raster.get("tcwv_smooth", tcwv_raster.tcwv)
         tcwv_vals = tcwv_source.round(1)
         tcwvs = np.unique(tcwv_vals)
         tcwvs = tcwvs[~np.isnan(tcwvs)]
+        if tcwvs.size == 0:
+            raise ValueError('no valid water vapor retrieval (tcwv NaN everywhere): no water pixel left after '
+                             'the cloud and water masks?')
         # TODO improve for air_mass raster
         Twvs = self.Twv_lut.Twv.interp(air_mass=self.air_mass_mean).interp(tcwv=tcwvs, method='linear').drop_vars('air_mass')
         self.Twv_raster = Twvs.interp(tcwv=tcwv_vals, method='nearest')
@@ -888,6 +1045,63 @@ class Algo(Product):
         # conflicts with the retrieved coarse-grid ``tcwv`` output variable.
         if 'tcwv' in self.Twv_raster.coords:
             self.Twv_raster = self.Twv_raster.drop_vars('tcwv')
+
+    def other_gas_transmittance(self, term, aot550=0.1, tcwv=None):
+        r'''
+        Transmittance of the gases other than water vapor for a term of the signal (``'dir'``, ``'atm'`` or
+        ``'w'``, see :py:class:`hgrs.gas_coupling.GasTransmittance`), on the wavelengths of the gaseous LUT.
+
+        :param aot550: aerosol optical thickness at 550 nm (coefficients of the coupling)
+        :param tcwv: water vapor column (kg m-2), for the coefficients; None: 20 kg m-2
+        '''
+        h2o = None if tcwv is None else tcwv / 10.
+        Tg = self.gas_transmittance.other_gases(term, self.air_mass_mean, self.pressure, self.to3c, self.tno2c,
+                                                self.tch4c, aot550=aot550, h2o=h2o)
+        return xr.DataArray(Tg, coords={'wl': self.gas_transmittance.wl}, dims='wl')
+
+    def get_coupling_factors(self, tcwv_raster, aot550):
+        r'''
+        Factors of the coupled gaseous transmittance (``gas_coupling: path_length``), relative to the
+        direct-beam transmittance :math:`T_d = T_{g}\, T_{wv}` used by :py:meth:`other_gas_correction` and
+        :py:meth:`water_vapor_correction`:
+
+        * ``f_path_raster`` :math:`= T_{atm} / T_d`, applied to the path reflectance :math:`R_{diff}`;
+        * ``f_w_raster`` :math:`= T_d / T_{w}`, applied to the water-leaving signal;
+
+        so that :math:`R_{rs} = \left[R_{toa}/T_d - f_{path} R_{diff} - R_{dir}\right] f_w / \pi`, i.e.
+        :math:`R_{toa} = T_{atm} R_{diff} + T_d R_{dir} + T_w \pi R_{rs}`. Rasters (wl, y, x) on the coarse grid
+        of ``tcwv_raster`` (water vapor rounded to 0.1 kg m-2, as :py:meth:`get_wv_transmittance_raster`);
+        ``f_path_mean``: median of ``f_path_raster`` over the scene (wl). None with ``gas_coupling: decoupled``.
+
+        :param tcwv_raster: xarray.Dataset with ``tcwv`` (and ``tcwv_smooth``), see :py:class:`WaterVapor`
+        :param aot550: scene aerosol optical thickness at 550 nm
+        '''
+        if self.gas_coupling == 'decoupled':
+            self.f_path_raster = self.f_w_raster = self.f_path_mean = None
+            return
+        tcwv_source = tcwv_raster.get("tcwv_smooth", tcwv_raster.tcwv)
+        tcwv_vals = tcwv_source.round(1)
+        tcwvs = np.unique(tcwv_vals)
+        tcwvs = tcwvs[~np.isnan(tcwvs)]
+        if tcwvs.size == 0:
+            self.f_path_raster = self.f_w_raster = self.f_path_mean = None
+            return
+        tcwv_scene = float(np.median(tcwvs))
+        convolve = lambda t: self.sensor_description.convolve(t).rename({"wl_sensor": "wl"})
+        gt = self.gas_transmittance
+        T = {}
+        for term in ('dir', 'atm', 'w'):
+            # all the gases together: the coupled transmittance of a channel is not the product of those of
+            # its gases
+            T[term] = convolve(gt.total_table(term, self.air_mass_mean, self.pressure, self.to3c, self.tno2c,
+                                              self.tch4c, tcwvs, aot550))
+        f_path = (T['atm'] / T['dir']).transpose('tcwv', 'wl')
+        f_w = (T['dir'] / T['w']).transpose('tcwv', 'wl')
+        self.f_path_raster = f_path.interp(tcwv=tcwv_vals, method='nearest').drop_vars('tcwv').transpose('wl', ...)
+        self.f_w_raster = f_w.interp(tcwv=tcwv_vals, method='nearest').drop_vars('tcwv').transpose('wl', ...)
+        self.f_path_mean = f_path.sel(tcwv=tcwv_scene, method='nearest').drop_vars('tcwv')
+        logger.info('gas coupling: f_path at %s', {int(w): round(float(self.f_path_mean.sel(wl=w, method='nearest')), 3)
+                                                  for w in (687, 720, 762, 820, 940) if self.wl.min() <= w <= self.wl.max()})
 
     def get_full_resolution(self, xarr):
         '''Interpolate ``xarr`` (coarse raster) onto the full resolution grid.'''
@@ -1098,6 +1312,69 @@ def _water_vapor_residuals(x, tcwv_grid, Twv_table, wl, y):
     return Solver.interp_linear(tcwv_grid, Twv_table, tcwv) * (a * wl + b) - y
 
 
+def _water_vapor_residuals_coupled(x, tcwv_grid, Twv_table, Tatm_table, path, wl, y):
+    r'''Residuals of the coupled water vapor model (:py:meth:`WaterVapor.solve` with
+    ``gas_coupling: path_length``): :math:`T_{atm}(W)\, k\, R_p(\lambda) + T_{wv}(W)\,(a\lambda + b) - y`'''
+    tcwv, k, a, b = x
+    return (Solver.interp_linear(tcwv_grid, Tatm_table, tcwv) * k * path
+            + Solver.interp_linear(tcwv_grid, Twv_table, tcwv) * (a * wl + b) - y)
+
+
+def _water_vapor_residuals_prior(x, residuals, args, sigma, prior):
+    r'''
+    Residuals of a water vapor model weighted by the uncertainty of the reflectance, with the prior of the column
+    (setting ``water_vapor: prior``) as an extra residual:
+    :math:`[r(\lambda)/\sigma_R,\ (W - \bar W_{CAMS})/\sigma_W]`, so that the cost is
+    :math:`\sum_\lambda (r/\sigma_R)^2 + ((W - \bar W_{CAMS})/\sigma_W)^2`.
+
+    :param residuals, args: model residual function and its arguments after ``x``
+    :param sigma: :math:`\sigma_R`
+    :param prior: :math:`(\bar W_{CAMS}, \sigma_W)`
+    '''
+    mean, sigma_w = prior
+    return np.append(residuals(x, *args) / sigma, (x[0] - mean) / sigma_w)
+
+
+def _water_vapor_lsq(residuals, args, fit, **kwargs):
+    r''':py:func:`scipy.optimize.least_squares` of ``residuals``, with the prior of ``fit['regularization']``'''
+    reg = fit.get('regularization')
+    if reg is not None:
+        args = (residuals, args, reg['sigma'], reg['prior'])
+        residuals = _water_vapor_residuals_prior
+    return least_squares(residuals, fit['x0'], args=args, **kwargs)
+
+
+def _fit_water_vapor_coupled_block(task):
+    r'''Coupled water vapor fit of the mega-pixels of a block: array (x, y, 6) with
+    :math:`(W, k, b)` and their standard deviations (the slope :math:`a` is not stored)'''
+    spectra, n_water_pixels, fit = task
+    nwl, height, width = spectra.shape
+    result = np.full((width, height, 6), np.nan)
+    for ix in range(width):
+        for iy in range(height):
+            if n_water_pixels is not None and n_water_pixels[iy, ix] < fit['pixel_threshold']:
+                continue
+            y = spectra[:, iy, ix]
+            valid = ~np.isnan(y)
+            if valid.sum() <= 4:
+                continue
+            y = y[valid]
+            res_lsq = _water_vapor_lsq(_water_vapor_residuals_coupled,
+                                       (fit['tcwv_grid'], fit['Twv_table'][:, valid], fit['Tatm_table'][:, valid],
+                                        fit['path'][valid], fit['wl'][valid], y), fit,
+                                       bounds=([0, 0, -10, -1], [60, 5, 1, 1]),
+                                       diff_step=1e-2, xtol=1e-2, ftol=1e-2, max_nfev=40)
+            xres = res_lsq.x
+            resVariance = (res_lsq.fun ** 2).sum() / max(len(res_lsq.fun) - len(res_lsq.x), 1)
+            hess = np.matmul(res_lsq.jac.T, res_lsq.jac)
+            try:
+                std = Solver.errFit(np.linalg.inv(hess), resVariance)
+            except np.linalg.LinAlgError:
+                std = [np.nan] * 4
+            result[ix, iy, :] = [xres[0], xres[1], xres[3], std[0], std[1], std[3]]
+    return result
+
+
 def _fit_water_vapor_block(task):
     r'''Water vapor fit (:py:meth:`WaterVapor.solve`) of the mega-pixels of a block: array (x, y, 6)'''
     spectra, n_water_pixels, fit = task
@@ -1115,10 +1392,10 @@ def _fit_water_vapor_block(task):
                 continue
             y = y[valid]
             # TODO put solver parameter in the configuration
-            res_lsq = least_squares(_water_vapor_residuals, fit['x0'],
-                                    args=(fit['tcwv_grid'], fit['Twv_table'][:, valid], fit['wl'][valid], y),
-                                    bounds=([0, -10, 0], [60, 1, 1]),
-                                    diff_step=1e-2, xtol=1e-2, ftol=1e-2, max_nfev=20)
+            res_lsq = _water_vapor_lsq(_water_vapor_residuals,
+                                       (fit['tcwv_grid'], fit['Twv_table'][:, valid], fit['wl'][valid], y), fit,
+                                       bounds=([0, -10, 0], [60, 1, 1]),
+                                       diff_step=1e-2, xtol=1e-2, ftol=1e-2, max_nfev=20)
             xres = res_lsq.x
             resVariance = (res_lsq.fun ** 2).sum() / (len(res_lsq.fun) - len(res_lsq.x))
             hess = np.matmul(res_lsq.jac.T, res_lsq.jac)
@@ -1166,12 +1443,19 @@ def _fit_aerosol_block(task):
                 idx_atmo = _nearest_bands(wl, valid, fit['wl_atmo'])
                 idx_non_neg = _nearest_bands(wl, valid, fit['wl_non_neg'])
 
+            reg = fit.get('regularization')
+            hard = reg is None or reg['sigma_nn'] is None
             cons = ({'type': 'ineq',
                      'fun': model.constraint,
                      'args': (idx_non_neg, yfull[idx_non_neg])
-                     })
-            min_res = minimize(model.cost, x0,
-                               args=(idx_atmo, yfull[idx_atmo]),
+                     },) if hard else ()
+            if reg is None:
+                cost, args = model.cost, (idx_atmo, yfull[idx_atmo])
+            else:
+                cost = model.cost_regularized
+                args = (idx_atmo, yfull[idx_atmo], idx_non_neg, yfull[idx_non_neg], reg)
+            min_res = minimize(cost, x0,
+                               args=args,
                                method='SLSQP',
                                bounds=fit['bounds'],
                                constraints=cons, options=fit['options']
@@ -1227,20 +1511,58 @@ class AerosolModel():
         r''':py:meth:`Aerosol.constraint` with :py:meth:`residuals`'''
         return np.min(self.residuals(x, idx, y))
 
+    def cost_regularized(self, x, idx, y, idx_nn, y_nn, reg):
+        r'''
+        Regularized cost (settings ``aerosol: prior``, ``nonnegativity``):
+
+        .. math::
+
+           J = \sum_{\lambda \in \Lambda_a} \left[\frac{R - R_{sim}}{\sigma_R}\right]^2
+             + \left[\frac{\tau_{ref} - \bar\tau_{CAMS}}{\sigma_{CAMS}}\right]^2
+             + \sum_{\lambda \in \Lambda_+} \left[\frac{\min(0,\, R - R_{sim})}{\sigma_+}\right]^2
+
+        the second term with ``prior: cams``, the third with ``nonnegativity: soft`` (otherwise the
+        non-negativity stays a hard constraint of the fit).
+
+        :param reg: dict ``sigma`` (:math:`\sigma_R`), ``prior`` (None or (mean, sigma)), ``sigma_nn`` (None or
+            :math:`\sigma_+`)
+        '''
+        j = np.sum((self.residuals(x, idx, y) / reg['sigma']) ** 2)
+        if reg['prior'] is not None:
+            mean, sigma = reg['prior']
+            j += ((x[0] - mean) / sigma) ** 2
+        if reg['sigma_nn'] is not None:
+            j += np.sum((np.minimum(self.residuals(x, idx_nn, y_nn), 0) / reg['sigma_nn']) ** 2)
+        return j
+
 
 class WaterVapor(Solver):
     r'''
     Retrieval of the total column water vapor :math:`W` on the coarse raster.
 
-    In each mega-pixel, the reflectance over ``prod.wl_water_vapor`` (800-1300 nm) is fitted with
+    In each mega-pixel, the reflectance over ``prod.wl_water_vapor`` (``water_vapor: wavelengths_nm``, 931-1060 nm by
+    default, 800-1300 nm with the former behavior), divided by the direct-beam transmittance of the other gases, is
+    fitted by non-linear least squares (:py:func:`scipy.optimize.least_squares`, :math:`\lambda` in µm):
 
-    .. math::
+    * ``gas_coupling: path_length``: path reflectance and surface term with their own transmittances,
 
-       R(\lambda) \simeq T_{wv}(\lambda; W, \bar M)\, (a\lambda + b)
+      .. math::
 
-    by non-linear least squares (:py:func:`scipy.optimize.least_squares`), with
-    :math:`(W, a, b) \in [0, 60] \times [-10, 1] \times [0, 1]` (:math:`\lambda` in µm). The
-    uncertainty ``tcwv_std`` is given by :py:meth:`Solver.errFit`.
+         R(\lambda) \simeq \frac{T_{atm}(\lambda; W)}{T_{g}(\lambda)}\, k\, R_{path}(\lambda)
+         + T_{wv}(\lambda; W, \bar M)\, (a\lambda + b)
+
+      with :math:`R_{path}` the path reflectance of the TOA LUT at the first-guess AOT
+      (:py:meth:`path_reflectance_first_guess`), :math:`T_{atm}` the coupled transmittance of all the gases
+      (:py:class:`hgrs.gas_coupling.GasTransmittance`), :math:`(W, k, a, b) \in [0, 60] \times [0, 5] \times
+      [-10, 1] \times [-1, 1]` and the first guess of :math:`W` from CAMS;
+    * ``gas_coupling: decoupled``: :math:`R(\lambda) \simeq T_{wv}(\lambda; W, \bar M)\, (a\lambda + b)`, with
+      :math:`(W, a, b) \in [0, 60] \times [-10, 1] \times [0, 1]`.
+
+    Over dark water the path reflectance dominates and its absorption bands are shallower than those of the
+    direct beam: the decoupled model underestimates :math:`W` (by a factor 3 to 5 at the AERONET-OC stations, with
+    EnMAP), the coupled one recovers it. The default range keeps to one detector of EnMAP: the VNIR and SWIR
+    reflectances disagree around 900 nm by up to 50 %, which biases a fit across them. The uncertainty
+    ``tcwv_std`` is given by :py:meth:`Solver.errFit`.
 
     :param prod: :py:class:`Algo` object, corrected for the other gases
     :param raster_name: name of the raster attribute of ``prod`` to process
@@ -1291,6 +1613,33 @@ class WaterVapor(Solver):
         self.tcwv_grid = self.Twv_.tcwv.values
         self.Twv_table = self.Twv_.transpose('tcwv', 'wl').values
 
+        # coupled model (gas_coupling: path_length): transmittance of the path reflectance and shape of
+        # the path reflectance (TOA LUT at the first-guess AOT), see solve
+        self.coupled = getattr(prod, 'gas_coupling', 'decoupled') == 'path_length'
+        if self.coupled:
+            aot550 = prod.aerosol_parameters.aod550_initial
+            # the data are divided by the direct-beam transmittance of the other gases (Tg_other): the path
+            # term is T_atm(W) / Tg_other, with T_atm the coupled transmittance of all the gases
+            gt = prod.gas_transmittance
+            Tatm = prod.sensor_description.convolve(
+                gt.total_table('atm', self.air_mass, prod.pressure, prod.to3c, prod.tno2c, prod.tch4c,
+                               self.tcwv_grid, aot550)
+            ).rename({"wl_sensor": "wl"}).sel(wl=self.wl.values, method='nearest')
+            Tatm = Tatm / prod.Tg_other.sel(wl=Tatm.wl.values, method='nearest').assign_coords(wl=Tatm.wl.values)
+            self.Tatm_table = Tatm.transpose('tcwv', 'wl').values
+            self.path_reflectance = self.path_reflectance_first_guess(prod, aot550)
+
+    def path_reflectance_first_guess(self, prod, aot550):
+        r'''Path reflectance :math:`R_{diff}(\lambda)` of the TOA LUT (aerosol model of the scene, mean angles) at
+        the first-guess AOT, on the wavelengths of the fit: spectral shape of the path term of the coupled
+        water vapor model'''
+        sza, vza = prod.sza_mean, prod.vza_mean
+        raa_lut = (180 - prod.raa_mean) % 360
+        I = (prod.aero_lut.sel(model=prod.aerosol_parameters.aerosol_model).I
+             .interp(vza=vza, azi=raa_lut, method='linear').interp(sza=sza, method='quadratic').squeeze())
+        R = I.interp(aot_ref=aot550, method='linear').interp(wl=self.wl.values, method='quadratic')
+        return (R / np.cos(np.radians(sza))).values
+
     def interp_tcwv(self, Twv_table, tcwv):
         r'''
         :math:`T_{wv}(\lambda; W)` by linear interpolation in ``tcwv_grid`` (same result as
@@ -1321,6 +1670,24 @@ class WaterVapor(Solver):
     def func2(self, x, Twv, wl, y):
         return self.toa_simu2(wl, Twv, *x) - y
 
+    def regularization(self):
+        r'''
+        Prior of the water vapor column (setting ``water_vapor: prior: cams``, experimental): dict ``sigma``
+        (:math:`\sigma_R` = ``reflectance_sigma``) and ``prior`` :math:`(\bar W_{CAMS}, \sigma_W)` with
+        :math:`\sigma_W = \max(` ``prior_sigma_relative`` :math:`\bar W_{CAMS},` ``prior_sigma_min`` :math:`)`,
+        for :py:func:`_water_vapor_residuals_prior`; None without prior (default) or without CAMS column.
+        '''
+        settings = self.parameters
+        if settings.prior == 'none':
+            return None
+        cams = getattr(self.prod, 'cams_data', None)
+        if cams is None or 'tcwv' not in cams or not np.isfinite(float(cams.tcwv)):
+            logger.warning('water vapor prior: no CAMS column, fit without prior')
+            return None
+        w = float(cams.tcwv)
+        return dict(sigma=settings.reflectance_sigma,
+                    prior=(w, max(settings.prior_sigma_relative * w, settings.prior_sigma_min)))
+
     def solve(self, x0=None, pool=None):
         r'''
         Run the fit on every mega-pixel with enough water pixels (parallel processing of blocks of
@@ -1339,10 +1706,21 @@ class WaterVapor(Solver):
             water_pixel_number = None
         # numpy arrays: xarray indexing of each mega-pixel costs more than its fit
         spectra = np.asarray(self.data.transpose('wl', 'y', 'x').values)
-        fit = dict(x0=x0, tcwv_grid=self.tcwv_grid, Twv_table=self.Twv_table, wl=self.wl_mic,
-                   pixel_threshold=self.prod.pixel_threshold)
-        result = self.fit_blocks(_fit_water_vapor_block, spectra, water_pixel_number, fit, 6,
-                                 self.prod.block_size, pool)
+        if self.coupled:
+            # T_atm(W) k R_p + T_wv(W) (a wl + b): first guess W from CAMS, k = 1 (LUT path reflectance), no
+            # surface term
+            cams = getattr(self.prod, 'cams_data', None)
+            w0 = float(cams.tcwv) if cams is not None and 'tcwv' in cams else x0[0]
+            fit = dict(x0=[min(max(w0, 0.5), 59.), 1., 0., 0.], tcwv_grid=self.tcwv_grid, Twv_table=self.Twv_table,
+                       Tatm_table=self.Tatm_table, path=self.path_reflectance, wl=self.wl_mic,
+                       pixel_threshold=self.prod.pixel_threshold, regularization=self.regularization())
+            result = self.fit_blocks(_fit_water_vapor_coupled_block, spectra, water_pixel_number, fit, 6,
+                                     self.prod.block_size, pool)
+        else:
+            fit = dict(x0=x0, tcwv_grid=self.tcwv_grid, Twv_table=self.Twv_table, wl=self.wl_mic,
+                       pixel_threshold=self.prod.pixel_threshold, regularization=self.regularization())
+            result = self.fit_blocks(_fit_water_vapor_block, spectra, water_pixel_number, fit, 6,
+                                     self.prod.block_size, pool)
         self.result = result
         self.water_vapor = xr.Dataset(dict(tcwv=(["y", "x"], result[:, :, 0].T),
                                            tcwv_std=(["y", "x"], result[:, :, 3].T)),
@@ -1481,6 +1859,11 @@ class Aerosol(Solver):
         self.pixel_threshold = self.prod.pixel_threshold
         self.wl_sunglint = self.prod.water_parameters.wl_sunglint
         self.prepare_lut(self.wl)
+        # coupled gaseous transmittance: the data are divided by the direct-beam transmittance, the path
+        # reflectance of the model is multiplied by f_path = T_atm / T_dir (scene median)
+        f_path = getattr(prod, 'f_path_mean', None)
+        if f_path is not None:
+            self.model.Rdiff_table = self.model.Rdiff_table * f_path.sel(wl=self.wl.values, method='nearest').values
 
     def prepare_lut(self, wl):
         r'''
@@ -1492,6 +1875,8 @@ class Aerosol(Solver):
         - ``aot_lut``: :math:`\tau_a(\lambda; \tau_{ref})`
         - ``rot``: :math:`\tau_R(\lambda)\, P / P_0`
         - ``sunglint_eps``: :math:`\varepsilon(\lambda)`
+        - ``dRray``: change of the Rayleigh reflectance from the pressure of the LUT to the surface pressure, added to
+          ``Rtoa_lut`` (:py:func:`rayleigh_pressure_delta`; not with the former behavior)
 
         :param wl: wavelengths (nm)
         '''
@@ -1517,11 +1902,28 @@ class Aerosol(Solver):
             .interp(vza=vza, azi=raa_lut, method='linear')
             .interp(sza=sza, method='quadratic').squeeze()
         )
+        if behavior.PREVIOUS_BEHAVIOR:
+            norm_radiance = norm_radiance.interp(wl=wl, method="quadratic")
+        else:
+            # radiances vary as a power law of the wavelength: quadratic in log-log on the coarse LUT grid
+            # (leave-one-out on the OSOAA LUT: ~1 % error instead of ~10 % in the visible)
+            norm_radiance = _interp_wl_loglog(norm_radiance, wl)
         self.Rtoa_lut = (
-            norm_radiance.interp(wl=wl, method="quadratic")
+            norm_radiance
             .interp(aot_ref=aot_refs, method='quadratic')
             .dropna('aot_ref') / np.cos(np.radians(sza))
         )
+        if not behavior.PREVIOUS_BEHAVIOR:
+            # Rayleigh scattering at the surface pressure (the LUTs are computed for 1015.2 hPa): added to the
+            # path reflectance of all the aot_ref (aerosol-Rayleigh coupling kept)
+            Rray = (
+                self.aero_lut.sel(model=self.aerosol_model).I.sel(aot_ref=0)
+                .interp(vza=vza, azi=raa_lut, method='linear')
+                .interp(sza=sza, method='quadratic').squeeze() / np.cos(np.radians(sza))
+            )
+            rot_nodes = auxdata.rot.interp(wl=Rray.wl.values, kwargs={'fill_value': 'extrapolate'}).values
+            self.dRray = rayleigh_pressure_delta(Rray, rot_nodes, self.pressure, wl)
+            self.Rtoa_lut = self.Rtoa_lut + self.dRray
 
         # numpy LUTs for the fit: with xarray at each evaluation of the cost function and of the
         # constraint, the fit is ~80x slower
@@ -1584,6 +1986,19 @@ class Aerosol(Solver):
         r'''Non-negativity constraint :math:`\min_\lambda \left[R(\lambda) - R_{sim}(\lambda)\right] \geq 0`'''
         return np.min((self.func(x, aot, rot, Rtoa_lut, sunglint_eps, y)))
 
+    def regularization(self):
+        r'''
+        Settings of :py:meth:`AerosolModel.cost_regularized`, or None for the unregularized fit (defaults
+        ``aerosol: prior: none``, ``nonnegativity: hard``). The prior is the CAMS AOD(550) of the scene with
+        :math:`\sigma_{CAMS} = \max(s_{CAMS},\ 0.2\,\bar\tau_{CAMS} + 0.05)`, as for the bounds of the fit.
+        '''
+        state = self.aerosol_state
+        if not state.regularized:
+            return None
+        return dict(sigma=state.reflectance_sigma,
+                    prior=(state.aod550_initial, state.aod550_prior_std) if state.prior == 'cams' else None,
+                    sigma_nn=state.nonnegativity_sigma if state.nonnegativity == 'soft' else None)
+
     def solve(self, x0=[0.005, 0.], pool=None):
         r'''
         Retrieve :math:`(\tau_{ref}, B)` on every mega-pixel with enough water pixels
@@ -1622,7 +2037,7 @@ class Aerosol(Solver):
                    wl_atmo=self.wl_atmo, wl_non_neg=self.wl_non_neg,
                    bounds=((self.aod550_min, self.aod550_max), (0, 1.3)),
                    options=self._optimizer_options(), warm_start=self.aerosol_state.solver_warm_start,
-                   pixel_threshold=self.pixel_threshold)
+                   pixel_threshold=self.pixel_threshold, regularization=self.regularization())
         result = self.fit_blocks(_fit_aerosol_block, spectra, n_water_pixels, fit, 4, self.block_size, pool)
 
         self.aero_img = xr.Dataset(

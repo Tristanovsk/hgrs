@@ -92,6 +92,31 @@ at half maximum :math:`\Gamma_i`:
    X_i = \frac{\int X(\lambda)\, S_i(\lambda)\, d\lambda}{\int S_i(\lambda)\, d\lambda},
    \qquad S_i(\lambda) = \exp\left(-\frac{(\lambda - \lambda_i)^2}{2\sigma_i^2}\right)
 
+EnMAP detector offset
+~~~~~~~~~~~~~~~~~~~~~
+
+The VNIR and SWIR detectors of EnMAP overlap between about 900 and 990 nm. Over dark water, the SWIR detector
+reads 4e-3 to 1.3e-2 more than the VNIR one at the same wavelength (one scene per AERONET-OC site, L1C
+processors V010502 and V010506), while the two agree to a few percent over land: an additive difference at low
+signal, not a gain difference. The setting ``product: enmap_detector_offset`` (experimental, ``none`` by default)
+corrects it (:py:func:`hgrs.drivers.enmap.detector_offset`). The offset
+
+.. math::
+
+   \delta = \operatorname{median}_{water} \left[R_{SWIR}(\lambda_0) - R_{VNIR}(\lambda_0)\right]
+
+is estimated on the water pixels of the scene (:math:`R(1650) < 0.02` and :math:`R(560) > 3 R(1650)`, at least
+1000 pixels), at the VNIR band :math:`\lambda_0` nearest to 990 nm, the SWIR reflectance being interpolated
+linearly to :math:`\lambda_0`. It is applied before the bands of the overlap are removed:
+
+* ``vnir_ramp``: :math:`R_{VNIR}(\lambda) + \delta\, w(\lambda)`, with :math:`w = 0` up to 700 nm, increasing
+  linearly to 1 at :math:`\lambda_0`;
+* ``swir_ramp``: :math:`R_{SWIR}(\lambda) - \delta\, w(\lambda)`, with :math:`w = 1` up to :math:`\lambda_0`,
+  decreasing linearly to 0 at 2200 nm.
+
+The offset is stored in the attribute ``detector_offset_990`` of the Level-1 dataset read by the driver.
+Which detector is biased is not known; this correction is being validated at the AERONET-OC stations.
+
 Water pixels
 ------------
 
@@ -123,15 +148,70 @@ with :math:`\kappa` = ``coef_abs_scat`` = 0.35. The transmittance, for the mean 
    T_g(\lambda) = \exp\left(-\bar M\, \tau_g(\lambda)\right), \qquad
    R(\lambda) = \frac{R_{TOA}(\lambda)}{T_g(\lambda)}
 
+Coupling of the absorption with the scattering
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The direct-beam transmittance above is exact for the light crossing the atmosphere along straight lines (sun
+glint, nearly the water-leaving signal), not for the path reflectance: the photons scattered by the molecules and
+aerosols above the absorbers shortcut part of the absorbing column, and their paths are spread. With
+``gas_coupling: path_length`` (default), each term has its own transmittance (:py:mod:`hgrs.gas_coupling`, ported
+from ``radcalnet_oc``):
+
+.. math::
+
+   R_{TOA} = T_{atm}\, R_{diff} + T_d\, R_{dir} + T_w\, \pi R_{rs}\, T^{\downarrow} t^{\uparrow}
+
+with :math:`T_d = T_g T_{wv}` the direct-beam transmittance and, in the O2 and H2O windows of 684-990 nm (O2-B,
+H2O 720, O2-A, H2O 820, 900 and 940 nm), the photon path-length model for the path reflectance (:math:`T_{atm}`)
+and the water-leaving signal (:math:`T_w`):
+
+.. math::
+
+   T = \left(1 + s^2\, \eta\, \bar M \tau\right)^{-1/s^2}
+
+channel by channel, :math:`\tau` the vertical optical thickness of the channel, :math:`\eta` the ratio of the
+mean absorber path to the geometric one and :math:`s^2` the relative variance of the paths (Gamma distribution),
+both linear in :math:`\bar M - 2`, :math:`\tau_{550} - 0.1` and :math:`\ln(W/20\,\mathrm{kg\,m^{-2}})`, fitted
+on SOS-ABS coupled simulations. In the windows, :math:`\tau` is the total absorption optical thickness of the
+channel (all the gases together, as in the fit: the coupled transmittance of a channel is not the product of those
+of its gases) and :math:`\kappa` = 1; outside the windows, all the gases keep the direct-beam air mass. The table of
+the coefficients can be replaced (``gas_coupling_table``). The correction becomes
+
+.. math::
+
+   R_{rs} = \left[\frac{R_{TOA}}{T_d} - f_{path} R_{diff} - R_{dir}\right] \frac{f_w}{\pi}, \qquad
+   f_{path} = \frac{T_{atm}}{T_d}, \quad f_w = \frac{T_d}{T_w}
+
+and :math:`f_{path}` also scales the path reflectance of the aerosol fit. With ``o2_model: lbl_o2b`` (default), the O2
+absorption of the O2-B band (683-702 nm) is computed line by line (HITRAN), averaged in the cells of the gaseous
+LUT, in place of the REPTRAN table, and the O2-A band (755-775 nm) keeps REPTRAN: against the SOS-ABS CKD, the
+band-mean O2 absorption of REPTRAN is 42-72 % too strong in the O2-B band and that of the line-by-line table
+15-18 % too weak in the O2-A band (air masses 1-3.5), which the closure with EnMAP at AERONET-OC stations confirms.
+``o2_model: lbl`` uses the line-by-line table in both bands. ``gas_coupling: decoupled`` and ``o2_model: reptran``
+give the results of hGRS 1.2.0. The analysis is in the research notebooks (:doc:`tutorials/research/index`).
+
 Water vapor
 -----------
 
-In each mega-pixel, the reflectance over :math:`\Lambda_{wv}` (800-1300 nm) is fitted by a linear
-background attenuated by water vapor:
+In each mega-pixel, the reflectance over :math:`\Lambda_{wv}` (931-1060 nm; 800-1300 nm with the former
+behavior), divided by the direct-beam transmittance of the other gases, is fitted by a linear background attenuated by water vapor:
 
 .. math::
 
    R(\lambda) \simeq T_{wv}(\lambda; W, \bar M)\, (a\lambda + b), \qquad \lambda\ \text{in µm}
+
+With ``gas_coupling: path_length``, the path reflectance is modelled with its own transmittance: the shape
+:math:`R_p(\lambda)` of the path reflectance of the TOA LUT at the first-guess AOT, with a free amplitude :math:`k`,
+
+.. math::
+
+   R(\lambda) \simeq \frac{T_{atm}(\lambda; W)}{T_g(\lambda)}\, k\, R_p(\lambda) + T_{wv}(\lambda; W, \bar M)\, (a\lambda + b)
+
+with :math:`T_{atm}` the coupled transmittance of all the gases and :math:`T_g` the direct-beam transmittance of
+the gases other than water vapor (first guess of :math:`W`: CAMS). The decoupled model retrieves an effective
+column, which over dark water is a fraction of the true one (by a factor 3 to 5 at the AERONET-OC stations, with
+EnMAP). The default range keeps to the SWIR detector of EnMAP: the VNIR and SWIR reflectances disagree around
+900 nm by up to 50 %, which biases a fit across them.
 
 where :math:`T_{wv}` is interpolated in a pre-computed LUT. :math:`(W, a, b)` are retrieved by
 non-linear least squares within :math:`[0, 60] \times [-10, 1] \times [0, 1]`; the uncertainty of
@@ -144,6 +224,19 @@ non-linear least squares within :math:`[0, 60] \times [-10, 1] \times [0, 1]`; t
 
 with :math:`J` the Jacobian of the residuals :math:`r` and :math:`n` the number of bands. The
 reflectance is then divided by :math:`T_{wv}(\lambda; W)`, with :math:`W` of the nearest mega-pixel.
+
+**Prior of the column (experimental).** With ``water_vapor: prior: cams`` (off by default), the fit minimizes
+
+.. math::
+
+   \sum_{\lambda \in \Lambda_{wv}} \left[\frac{r(\lambda)}{\sigma_R}\right]^2
+   + \left[\frac{W - \bar W_{CAMS}}{\sigma_W^{prior}}\right]^2,
+   \qquad \sigma_W^{prior} = \max(\rho\, \bar W_{CAMS},\ \sigma_{min})
+
+with :math:`\sigma_R` = ``reflectance_sigma`` (1e-3), :math:`\rho` = ``prior_sigma_relative`` (0.1) and
+:math:`\sigma_{min}` = ``prior_sigma_min`` (2 kg m-2); :math:`r` and :math:`J` above then include the prior
+term. Over dark water the absorption band carries little information on :math:`W`, and the retrieved column
+scatters around the CAMS one; the prior keeps it within the uncertainty of CAMS.
 
 .. _methods-aerosol:
 
@@ -193,6 +286,27 @@ The bounds are :math:`B \in [0, 1.3]` and
 with :math:`s_{CAMS}` the standard deviation of the CAMS AOD; the first guess is
 :math:`(\bar\tau_{CAMS}(550), 0)`.
 
+**Regularized fit (experimental).** Over very dark water the constraint can be infeasible for every
+:math:`\tau_{ref}`: with EnMAP, the VNIR reflectance of dark water can fall below the Rayleigh reflectance in
+the near infrared (see `EnMAP detector offset`_), and the fit then ends at the lower bound of
+:math:`\tau_{ref}`. A prior on :math:`\tau_{ref}` alone cannot change this, since a hard constraint prevails
+over the cost. The settings ``aerosol: prior: cams`` and ``nonnegativity: soft`` (off by default) replace the
+fit by
+
+.. math::
+
+   (\hat\tau_{ref}, \hat B) = \underset{\tau_{ref},\, B}{\operatorname{argmin}}
+   \sum_{\lambda \in \Lambda_a} \left[\frac{R - R_{sim}}{\sigma_R}\right]^2
+   + \left[\frac{\tau_{ref} - \bar\tau_{CAMS}(550)}{\sigma_{CAMS}}\right]^2
+   + \sum_{\lambda \in \Lambda_+} \left[\frac{\min(0,\, R - R_{sim})}{\sigma_+}\right]^2
+
+within the same bounds, with :math:`\sigma_{CAMS} = \max(s_{CAMS},\ 0.2\,\bar\tau_{CAMS}(550) + 0.05)`,
+:math:`\sigma_R` = ``reflectance_sigma`` and :math:`\sigma_+` = ``nonnegativity_sigma`` (each term is used only
+with its setting). :math:`\sigma_+` sets how far the water reflectance may go below zero in :math:`\Lambda_+`,
+that is, how much the visible-NIR bands are trusted against the SWIR bands and CAMS; the retrieved
+:math:`R_{rs}` can then be negative in these bands. These settings are being validated at the AERONET-OC
+stations.
+
 The retrieved :math:`\tau_{ref}` is smoothed with a weighted moving average (weights: number of water
 pixels of the mega-pixels)
 
@@ -240,7 +354,7 @@ Wavelength sets
      - Wavelengths (nm)
    * - :math:`\Lambda_{wv}`
      - ``wl_water_vapor``
-     - 800-1300
+     - 931-1060
    * - :math:`\Lambda_g`
      - ``wl_sunglint``
      - 2150-2250

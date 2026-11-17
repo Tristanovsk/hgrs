@@ -6,6 +6,10 @@ from typing import Any, Mapping
 import numpy as np
 import xarray as xr
 
+AEROSOL_PRIORS = ("none", "cams")
+WATER_VAPOR_PRIORS = ("none", "cams")
+NONNEGATIVITY_MODES = ("hard", "soft")
+
 
 def _dataclass_values(config, cls, tuple_fields=(), range_fields=()):
     known = {item.name for item in fields(cls)}
@@ -43,6 +47,20 @@ class ProductCorrectionConfig:
     ndwi_threshold: float = 0.01
     green_swir_index_threshold: float = 0.1
     gas_absorption_scattering_coefficient: float = 0.35
+    # coupling of the gaseous absorption with the scattering (hgrs.gas_coupling): 'path_length' or
+    # 'decoupled' (direct-beam transmittance for the whole signal); O2 absorption in the O2-B and O2-A
+    # bands: 'lbl_o2b' (line by line in the O2-B band, REPTRAN in the O2-A band), 'lbl' (line by line in
+    # both) or 'reptran'. The defaults here are the former behavior; the packaged default_config.yml
+    # selects 'path_length' and 'lbl_o2b'.
+    gas_coupling: str = "decoupled"
+    o2_model: str = "reptran"
+    # table of the coefficients of the photon path-length model (None: the table of the package)
+    gas_coupling_table: str | None = None
+    # EnMAP: correction of the radiometric mismatch of the VNIR and SWIR detectors, SWIR - VNIR estimated per
+    # scene over water at 990 nm (detector overlap): 'none', 'swir_ramp' (offset subtracted from the SWIR,
+    # tapered linearly to 0 at 2200 nm) or 'vnir_ramp' (offset added to the VNIR, ramped linearly from 0 at
+    # 700 nm), see hgrs.drivers.enmap.detector_offset
+    enmap_detector_offset: str = "none"
     prisma_land_mask_enabled: bool = True
     prisma_land_valid_classes: tuple[int, ...] = (0, 5, 6)
     prisma_land_forbidden_classes: tuple[int, ...] = (1, 2, 3, 4, 10)
@@ -68,6 +86,20 @@ class WaterVaporConfig:
     first_guess: tuple[float, float, float] = (2.0, -0.04, 0.1)
     smoothing_method: str = "none"
     smoothing_window: tuple[int, int] = (5, 5)
+    # prior of the water vapor column (Tikhonov term ((W - W_CAMS) / sigma_W)^2 in the cost): 'none' or
+    # 'cams', with sigma_W = max(prior_sigma_relative * W_CAMS, prior_sigma_min) (kg m-2)
+    prior: str = "none"
+    prior_sigma_relative: float = 0.1
+    prior_sigma_min: float = 2.0
+    # uncertainty of the fitted reflectance, weight of the data term against the prior
+    reflectance_sigma: float = 1e-3
+
+    def __post_init__(self):
+        if self.prior not in WATER_VAPOR_PRIORS:
+            raise ValueError(f"water_vapor: prior must be one of {WATER_VAPOR_PRIORS}, not {self.prior!r}")
+        if self.prior_sigma_relative < 0 or self.prior_sigma_min <= 0 or self.reflectance_sigma <= 0:
+            raise ValueError("water_vapor: prior_sigma_relative must be >= 0, prior_sigma_min and "
+                             "reflectance_sigma > 0")
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "WaterVaporConfig":
@@ -129,6 +161,23 @@ class AerosolCorrectionConfig:
     solver_max_iterations: int = 10
     solver_ftol: float | None = None
     solver_warm_start: bool = True
+    # prior of the AOT (Tikhonov term ((tau - tau_CAMS) / sigma_CAMS)^2 in the cost): 'none' or 'cams'
+    prior: str = "none"
+    # uncertainty of the fitted TOA reflectance, weight of the data term against the prior and the penalty
+    reflectance_sigma: float = 1e-3
+    # non-negativity of the water reflectance: 'hard' (SLSQP constraint) or 'soft' (one-sided quadratic
+    # penalty sum(min(0, R - R_sim)^2) / nonnegativity_sigma^2 in the cost)
+    nonnegativity: str = "hard"
+    nonnegativity_sigma: float = 1e-3
+
+    def __post_init__(self):
+        if self.prior not in AEROSOL_PRIORS:
+            raise ValueError(f"aerosol: prior must be one of {AEROSOL_PRIORS}, not {self.prior!r}")
+        if self.nonnegativity not in NONNEGATIVITY_MODES:
+            raise ValueError(
+                f"aerosol: nonnegativity must be one of {NONNEGATIVITY_MODES}, not {self.nonnegativity!r}")
+        if self.reflectance_sigma <= 0 or self.nonnegativity_sigma <= 0:
+            raise ValueError("aerosol: reflectance_sigma and nonnegativity_sigma must be positive")
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "AerosolCorrectionConfig":
@@ -162,6 +211,16 @@ class AerosolParameters:
     smoothing_method: str = "weighted_local"
     smoothing_window: tuple[int, int] = (1, 1)
     smoothing_footprint: tuple[int, int] = (3, 3)
+    aod550_prior_std: float = float("nan")
+    prior: str = "none"
+    reflectance_sigma: float = 1e-3
+    nonnegativity: str = "hard"
+    nonnegativity_sigma: float = 1e-3
+
+    @property
+    def regularized(self) -> bool:
+        """True when the cost has a prior or a soft non-negativity term (else the 1.x/2.0 fit)."""
+        return self.prior != "none" or self.nonnegativity != "hard"
 
     @property
     def aod550_bounds(self) -> tuple[float, float]:
@@ -209,6 +268,11 @@ class AerosolParameters:
             smoothing_method=config.smoothing_method,
             smoothing_window=config.smoothing_window,
             smoothing_footprint=config.smoothing_footprint,
+            aod550_prior_std=float(prior_std),
+            prior=config.prior,
+            reflectance_sigma=config.reflectance_sigma,
+            nonnegativity=config.nonnegativity,
+            nonnegativity_sigma=config.nonnegativity_sigma,
         )
 
 
@@ -276,6 +340,10 @@ class AtmosphericCorrectionConfig:
             "prisma_land_mask_enabled": ("product", "prisma_land_mask_enabled"),
             "prisma_land_valid_classes": ("product", "prisma_land_valid_classes"),
             "prisma_land_forbidden_classes": ("product", "prisma_land_forbidden_classes"),
+            "gas_coupling": ("product", "gas_coupling"),
+            "o2_model": ("product", "o2_model"),
+            "gas_coupling_table": ("product", "gas_coupling_table"),
+            "enmap_detector_offset": ("product", "enmap_detector_offset"),
             "aerosol_absorption_scattering_coefficient": (
                 "product", "gas_absorption_scattering_coefficient"
             ),

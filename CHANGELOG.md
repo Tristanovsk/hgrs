@@ -6,6 +6,118 @@ All notable changes to hGRS are listed here, most recent first. The format follo
 
 ## [Unreleased]
 
+### Added
+- Pressure scaling of the Rayleigh scattering of the path reflectance (current behavior; not with
+  `previous_behavior`; branch `feature/rayleigh_pressure`): the LUTs are OSOAA runs with the Rayleigh optical
+  thickness of 1015.2 hPa (`LUT_PRESSURE`), and the path reflectance was not scaled with the surface pressure
+  (+/-2.7e-3 at 400 nm, +/-1.2e-3 at 500 nm for +/-20 hPa, +0.3e-3 at 400 nm at 1013 hPa). `Aerosol.prepare_lut` adds
+  `dRray` = R_ray [(P/P_LUT)^D - 1] (`rayleigh_pressure_delta`, D = dln R_ray / dln tau_r from the wavelength nodes of
+  the LUT, 0.90 at 400 nm) to `Rtoa_lut` (aerosol fit and atmospheric image), and the final transmittance of the Rrs
+  is multiplied by exp(-dtau_r (1/2mu_s + 1/2mu_v)); validated with OSOAA runs at +/-20 hPa in radcalnet_oc
+  (`scripts/rayleigh_pressure`).
+- EnMAP, experimental: correction of the radiometric mismatch of the VNIR and SWIR detectors over dark water,
+  `product: enmap_detector_offset: none | vnir_ramp | swir_ramp` (`none` by default, products unchanged). The
+  offset SWIR - VNIR is the median over the water pixels of the scene at the VNIR band nearest to 990 nm
+  (detector overlap); `vnir_ramp` adds it to the VNIR, ramped from 0 at 700 nm to 1 at 990 nm, `swir_ramp`
+  subtracts it from the SWIR, tapered to 0 at 2200 nm (`hgrs.drivers.enmap.detector_offset`; attribute
+  `detector_offset_990`). Over dark water the SWIR detector reads 4e-3 to 1.3e-2 more than the VNIR one.
+- Aerosol retrieval, experimental: `aerosol: prior: none | cams` (Tikhonov term towards the CAMS AOD(550), with
+  the sigma of the bounds of the fit), `nonnegativity: hard | soft` (non-negativity of the water reflectance as
+  the constraint of the fit, or as a one-sided quadratic penalty of scale `nonnegativity_sigma`) and
+  `reflectance_sigma` (weight of the data term); `AerosolModel.cost_regularized`. The defaults (`none`, `hard`)
+  give the 2.0.0 fit. Over dark water, where the non-negativity of the EnMAP VNIR bands cannot be met and the
+  AOT ends at its lower bound, a soft non-negativity lets the SWIR bands and CAMS set the AOT (Lucinda scene:
+  98 % of the mega-pixels at the bound with the 2.0.0 fit, 4 % with `soft`, `nonnegativity_sigma: 2e-3` and the
+  CAMS prior).
+- Water vapor retrieval, experimental: `water_vapor: prior: none | cams` (Tikhonov term towards the CAMS column,
+  `sigma_W = max(prior_sigma_relative * W_CAMS, prior_sigma_min)`, defaults 0.1 and 2 kg m-2) and
+  `reflectance_sigma` (weight of the data term), in both the coupled and decoupled fits
+  (`WaterVapor.regularization`). `prior: none` (default) gives the 2.0.0 fit. On 22 AERONET-OC matchups chosen
+  among the largest water vapor errors, the MAPD of the column drops from 36 % to 4 %, as for CAMS alone.
+- Database of the EnMAP and PRISMA images, `hgrs.catalog` and the command `hgrs_catalog`: one copy of each
+  product by collection (`l1c`, `l1`, `l2c`, `l2a-hgrs/v<version>`, `l2w-acolite`, ...) and acquisition date,
+  producer and version read from the products; migration of existing folders as a reviewable plan (`plan`,
+  `apply`, `undo`: renames only, redundant copies to `_trash/`, former paths kept as symlinks in `legacy/`);
+  static STAC catalogue (layout of grstbx / GRSdriver.stac), GeoParquet index, views by site (former folders
+  and point sites inside the footprints), `search` and `ingest` of new downloads. Optional dependencies:
+  `pip install hGRS[catalog]` (geopandas, pyarrow, shapely) for the index and the search.
+
+### Changed
+- Lower memory use, same products (bit for bit): the TOA reflectance cube is read once into a single array, and
+  masked (water, clouds, bands of strong gaseous absorption) and corrected for the other gases in place; the
+  coarse raster is averaged by strips of mega-pixels; GDAL block cache of 256 MB for EnMAP (`GDAL_CACHEMAX`, kept
+  if set). Peak memory for a full EnMAP scene: 14.9 to 10.1 GB.
+- TOA reflectance `Rtoa` processed in float32 (float64 with `previous_behavior`): peak memory for a full EnMAP
+  scene 10.1 to 8.0 GB. The products change at the float32 rounding level only: `Rrs` by 1.5e-8 at most (median
+  relative difference 1.2e-7), `aot_ref` by 6e-7, `tcwv` by 6e-4 kg m-2 for 99 % of the mega-pixels (0.015 at
+  most); masks unchanged.
+
+### Fixed
+Each fix changes the products; `previous_behavior` restores the former processing.
+- Gaussian band response: sigma = FWHM / (2 sqrt(2 ln 2)) (`gaussian_fwhm_to_sigma`, also used by
+  `SolarIrradiance.Gamma2sigma`); the former sigma was sqrt(2) too large (0.60 FWHM).
+- EnMAP: the solar irradiance F0 is convolved with the band response once; the former two-stage resampling
+  applied it twice (up to ~2.7 % error on F0 near the Fraunhofer lines).
+- PRISMA: in the VNIR / SWIR overlap (~943-956 nm) the VNIR bands from the first SWIR band on are dropped, so
+  that each wavelength comes from one detector, as for EnMAP.
+- Aerosol LUT: radiances interpolated in wavelength quadratically in log-log (power law of the wavelength) instead
+  of linear space (leave-one-out on the OSOAA LUT: ~1 % error instead of ~10 % in the visible).
+- OmniCloudMask: run with the NIR at 865 nm and at 940 nm, a pixel is masked only where both runs flag it. With
+  940 nm alone the input depended on the water vapour and gave wrong shadows; with 865 nm alone clear dark water
+  was flagged as thin cloud (AAOT 2025-07-04 masked entirely). On 89 AERONET-OC crops: 5.0 % of the water
+  masked instead of 9.6 % (865) / 7.1 % (940), station pixels fully masked on 2 crops instead of 6 / 4.
+- Water vapor transmittance: a clear `ValueError` when the water vapor retrieval is NaN everywhere (no water
+  pixel left after the cloud and water masks) instead of numpy's "zero-size array to reduction operation fmin".
+
+## [2.0.0] - 2026-11-13
+
+### Added
+- Coupling of the gaseous absorption with the scattering, `hgrs.gas_coupling` (ported from
+  [radcalnet_oc](https://github.com/Tristanovsk/radcalnet_oc), commit d4f6c6f): the path reflectance and the
+  water-leaving signal have their own gaseous transmittance, from the photon path-length model
+  $T = (1 + s^2 \eta \bar M \tau)^{-1/s^2}$ fitted on SOS-ABS coupled simulations, in the O2 and H2O windows of
+  684-990 nm (`data/aux/gas_coupling_ppld.csv`); the sun glint keeps the direct-beam transmittance. In each window
+  $\tau$ is the total absorption optical thickness of the channel (all the gases together, as in the fit: the
+  coupled transmittance of a channel is not the product of those of its gases). Used in the water vapor retrieval
+  (path reflectance of the TOA LUT at the first-guess AOT with a free amplitude, first guess of the column from
+  CAMS), in the aerosol fit and in the final correction,
+  $R_{rs} = [R_{toa}/T_d - f_{path} R_{diff} - R_{dir}]\, f_w / \pi$. Settings
+  `atmospheric_correction: product: gas_coupling: path_length | decoupled` and `gas_coupling_table` (CSV of the
+  coefficients; `null`, the table of the package).
+- Line-by-line O2 absorption (HITRAN, table `data/lut/o2_lbl_tau.nc` of radcalnet_oc), in place of the REPTRAN
+  table. Setting `atmospheric_correction: product: o2_model: lbl_o2b | lbl | reptran`: `lbl_o2b` line by line in
+  the O2-B band (683-702 nm) and REPTRAN in the O2-A band (755-775 nm), `lbl` line by line in both. Against the
+  SOS-ABS CKD, the band-mean O2 absorption of REPTRAN is 42-72 % too strong in the O2-B band and that of the
+  line-by-line table 15-18 % too weak in the O2-A band (air masses 1-3.5).
+- Research notebooks *Coupling of absorption and scattering* (transmittance of each term against SOS-ABS, water vapor
+  retrieval, O2 bands) and their helpers, in `docs/source/tutorials/research`.
+- Validation scripts at the AERONET-OC stations with EnMAP, `validation/aeronet_oc` (matchup inventory, extraction,
+  processing with several versions, radiometric closure in the gaseous absorption bands), and
+  `utils/fit_gas_coupling_full.py`, which runs the fit of radcalnet_oc over 364-2500 nm and writes the table
+  `gas_coupling_ppld_full.csv` (not used by default).
+
+### Changed
+- The default settings use `gas_coupling: path_length`, `o2_model: lbl_o2b` and a water vapor fitting range
+  `water_vapor: wavelengths_nm: [931, 1060]` (was 800-1300 nm): SWIR detector of EnMAP only, 940 nm band (long-wave
+  half) and its continuum, because the VNIR and SWIR reflectances disagree around 900 nm by up to 50 %, which biases
+  a fit across them. Over dark water the decoupled model underestimates the water vapor column (by a factor 3 to 5
+  at the AERONET-OC stations), the coupled one recovers it.
+- The products change in the O2 and H2O bands of 684-990 nm and the retrieved water vapor column changes; they are
+  unchanged elsewhere. In the coupled windows the factor `gas_absorption_scattering_coefficient` of O2, O4 and CO2
+  is 1. `previous_behavior: true` (`gas_coupling: decoupled`, `o2_model: reptran`, 800-1300 nm) gives the results
+  of 1.2.0.
+- On two dark-water EnMAP scenes (Lucinda 2026-05-31, Brasil 2024-06-12 tile 001), `previous_behavior` (1.2.0) ->
+  2.0.0 defaults: TCWV 1.0 -> 12.2 and 2.7 -> 17.9 kg m-2 (CAMS 11.0 and 14.1); median residual band depth of Rrs
+  (sr-1): 764 nm -5.0e-4 -> -5e-5 and -8.8e-4 -> -9e-5, 720 nm -4.0e-4 -> -1.2e-4 and -6.2e-4 -> -2e-5, 817 nm
+  -1.1e-4 -> +1.0e-4 and -2.1e-4 -> +3.0e-4, 686 nm +8e-5 -> -1.0e-4 and +7e-5 -> -1.4e-4; the 941 nm band is
+  dropped (gaseous transmittance below 0.5 with the retrieved column); median Rrs at 443, 560, 665 and 865 nm within
+  7e-5. On both scenes the AOT of the retrieval stays at its lower bound, with and without the coupling: over dark
+  water the TOA reflectance of the EnMAP VNIR detector beyond ~720 nm is below the Rayleigh path reflectance (by
+  up to 3.5e-3 at 890 nm), which the non-negativity constraint of the aerosol fit (750, 800, 865 nm) cannot
+  accommodate. In the VNIR/SWIR overlap (975-990 nm) the SWIR detector reads 3e-3 to 1e-2 more than the VNIR one
+  over dark water at the same wavelength, on all the 17 scenes checked (L1C V010502 and V010506), while the two
+  agree to a few percent over land.
+
 ## [1.2.0] - 2026-11-12
 
 ### Added

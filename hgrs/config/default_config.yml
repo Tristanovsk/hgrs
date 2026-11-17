@@ -41,13 +41,31 @@ atmospheric_correction:
     water_pixel_percentage: 20
     block_size: 2                # mega-pixels per side of the blocks processed in parallel
     angle_rounding_digits: 1     # rounding of the angles (fewer LUT interpolations)
-    # factor kappa of CO2, O2 and O4 in the gaseous optical thickness
+    # factor kappa of CO2, O2 and O4 in the gaseous optical thickness (outside the windows of the
+    # coupling with gas_coupling: path_length, where kappa = 1)
     gas_absorption_scattering_coefficient: 0.35
+    # gaseous transmittance of each term of the signal: path_length (photon path-length model of
+    # radcalnet_oc for the path reflectance and the water-leaving signal in the O2 and H2O windows of
+    # 684-990 nm, direct beam for the sun glint) or decoupled (direct beam for the whole signal)
+    gas_coupling: path_length
+    # O2 absorption in the O2-B and O2-A bands: lbl_o2b (line by line in the O2-B band, REPTRAN in the
+    # O2-A band), lbl (line by line in both) or reptran (see hgrs.gas_coupling.GasTransmittance)
+    o2_model: lbl_o2b
+    # table of the coefficients of the photon path-length model (CSV, see hgrs.gas_coupling); null: the table
+    # of the package
+    gas_coupling_table: null
+    # EnMAP (experimental): correction of the radiometric mismatch of the VNIR and SWIR detectors over dark
+    # water, offset SWIR - VNIR estimated per scene over the water pixels at 990 nm (detector overlap):
+    # none, vnir_ramp (added to the VNIR, ramped linearly from 0 at 700 nm to 1 at 990 nm) or swir_ramp
+    # (subtracted from the SWIR, tapered linearly to 0 at 2200 nm), see hgrs.drivers.enmap.detector_offset
+    enmap_detector_offset: none
   # transmittance of the final correction: true, computed for the scene-mean AOT;
   # false, for the smoothed AOT of each mega-pixel
   bidirectional_transmittance_global: false
   water_vapor:
-    wavelengths_nm: [800, 1300]  # fitting range of the water vapor retrieval
+    # fitting range of the water vapor retrieval: SWIR detector of EnMAP only (the VNIR and SWIR detectors
+    # disagree around 900 nm, which biases a fit across them), 940 nm band (long-wave half) and its continuum
+    wavelengths_nm: [931, 1060]
     # first guess of the water vapor column W (kg m-2) and of the coefficients a, b of the
     # background reflectance a * wl + b (wl in micron), fitted as Twv(W) * (a * wl + b)
     first_guess: [2, -0.04, 0.1]
@@ -55,6 +73,13 @@ atmospheric_correction:
     # the retrieval, then NaN-mean) or nanmean_local, over smoothing_window mega-pixels
     smoothing_method: weighted_local
     smoothing_window: [5, 5]
+    # prior of the column (experimental): none or cams (Tikhonov term ((W - W_CAMS) / sigma_W)^2,
+    # sigma_W = max(prior_sigma_relative * W_CAMS, prior_sigma_min) in kg m-2); reflectance_sigma weights the
+    # data term. prior: none gives the 2.0.0 fit.
+    prior: none
+    prior_sigma_relative: 0.1
+    prior_sigma_min: 2.0
+    reflectance_sigma: 1.0e-3
   aerosol:
     # bands fitted by the aerosol and sunglint retrieval (nm, nearest band of the sensor)
     fit_wavelengths_nm: [1000, 1050, 1075, 1100, 1200, 1300, 1600, 1650, 1700, 2150, 2200, 2250]
@@ -72,3 +97,11 @@ atmospheric_correction:
     solver_max_iterations: 20
     solver_ftol: 1.0e-10
     solver_warm_start: false
+    # regularization of the fit (experimental): prior of the AOT, none or cams (Tikhonov term
+    # ((tau - tau_CAMS) / sigma_CAMS)^2, sigma_CAMS = max(std, 0.2 tau_CAMS + 0.05)); non-negativity of the
+    # water reflectance, hard (constraint) or soft (one-sided penalty of scale nonnegativity_sigma);
+    # reflectance_sigma weights the data term. prior: none and nonnegativity: hard give the 2.0.0 fit.
+    prior: none
+    reflectance_sigma: 1.0e-3
+    nonnegativity: hard
+    nonnegativity_sigma: 1.0e-3

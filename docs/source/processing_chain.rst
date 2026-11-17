@@ -226,8 +226,10 @@ Actual needs depend on the image size and on the fraction of water pixels. Indic
        (:py:class:`multiprocessing.Pool` with one process per core); run several images at a time
        with care (see the :doc:`batch processing tutorial <tutorials/batch_processing>`)
    * - RAM
-     - the Level-1 image cube in memory, plus the product
-     - the full-resolution correction is computed by blocks of 256 x 256 pixels
+     - the Level-1 image cube in memory, plus the product: about 8 GB at the peak for a full EnMAP
+       scene
+     - the TOA reflectance is held once, in float32, and masked and corrected in place; the
+       full-resolution correction is computed by blocks of 256 x 256 pixels
    * - Execution time
      - not measured systematically
      - dominated by the pixel-wise water vapor and aerosol retrievals on the mega-pixels with water
