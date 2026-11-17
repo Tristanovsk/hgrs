@@ -8,6 +8,8 @@ import xarray as xr
 
 AEROSOL_PRIORS = ("none", "cams")
 WATER_VAPOR_PRIORS = ("none", "cams")
+WATER_VAPOR_SURFACES = ("linear", "non_negative")
+WATER_VAPOR_OFFSETS = ("none", "saturated_bands")
 NONNEGATIVITY_MODES = ("hard", "soft")
 
 
@@ -93,10 +95,26 @@ class WaterVaporConfig:
     prior_sigma_min: float = 2.0
     # uncertainty of the fitted reflectance, weight of the data term against the prior
     reflectance_sigma: float = 1e-3
+    # surface term of the coupled model (gas_coupling: path_length): 'linear' (a wl + b, any sign, 2.0.0) or
+    # 'non_negative' (linear between its values at the ends of the fitting range, both >= 0)
+    surface: str = "linear"
+    # bounds of the scale factor k of the LUT path reflectance in the coupled model ((0, 5) in 2.0.0)
+    path_scale_limits: tuple[float, float] = (0.0, 5.0)
+    # signal above the water vapour (thin cirrus, stray light), subtracted from the data before the fit:
+    # 'none' or 'saturated_bands' (median reflectance of the bands of offset_wavelengths_nm in each mega-pixel)
+    offset: str = "none"
+    offset_wavelengths_nm: tuple[float, float] = (1360.0, 1395.0)
 
     def __post_init__(self):
         if self.prior not in WATER_VAPOR_PRIORS:
             raise ValueError(f"water_vapor: prior must be one of {WATER_VAPOR_PRIORS}, not {self.prior!r}")
+        if self.surface not in WATER_VAPOR_SURFACES:
+            raise ValueError(f"water_vapor: surface must be one of {WATER_VAPOR_SURFACES}, not {self.surface!r}")
+        if self.offset not in WATER_VAPOR_OFFSETS:
+            raise ValueError(f"water_vapor: offset must be one of {WATER_VAPOR_OFFSETS}, not {self.offset!r}")
+        k_min, k_max = self.path_scale_limits
+        if not 0 <= k_min < k_max:
+            raise ValueError("water_vapor: path_scale_limits must be (k_min, k_max) with 0 <= k_min < k_max")
         if self.prior_sigma_relative < 0 or self.prior_sigma_min <= 0 or self.reflectance_sigma <= 0:
             raise ValueError("water_vapor: prior_sigma_relative must be >= 0, prior_sigma_min and "
                              "reflectance_sigma > 0")
@@ -107,7 +125,8 @@ class WaterVaporConfig:
             **_dataclass_values(
                 config,
                 cls,
-                tuple_fields=("wavelengths_nm", "first_guess", "smoothing_window"),
+                tuple_fields=("wavelengths_nm", "first_guess", "smoothing_window", "path_scale_limits",
+                              "offset_wavelengths_nm"),
             )
         )
 

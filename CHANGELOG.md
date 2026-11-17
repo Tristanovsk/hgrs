@@ -7,6 +7,16 @@ All notable changes to hGRS are listed here, most recent first. The format follo
 ## [Unreleased]
 
 ### Added
+- Water vapor, coupled model (`gas_coupling: path_length`), experimental constraints (branch
+  `feature/abs_scat_coupling`; defaults unchanged, products identical): `water_vapor: surface: non_negative`
+  replaces the surface term a wl + b (any sign) by the line between its values s0, s1 >= 0 at the ends of the
+  fitting range, fitted to convergence (`gtol` 1e-15: with residuals ~1e-5 the default stops the fit early);
+  `path_scale_limits` bounds the scale factor k of the LUT path reflectance ([0, 5] in 2.0.0); `offset:
+  saturated_bands` subtracts the median reflectance of the bands of `offset_wavelengths_nm` (1360-1395 nm) in
+  each mega-pixel. With a surface term of any sign the fit can put the path term above the data (k R_p up to
+  2x the signal) and a negative surface term under it, whose deeper bands make the sum shallower: W is then too
+  high (RdP-EsNM 33-47 against 6-14 kg m-2 from AERONET, Lake Okeechobee 52 against 9, Banana River 29
+  against 6).
 - Pressure scaling of the Rayleigh scattering of the path reflectance (current behavior; not with
   `previous_behavior`; branch `feature/rayleigh_pressure`): the LUTs are OSOAA runs with the Rayleigh optical
   thickness of 1015.2 hPa (`LUT_PRESSURE`), and the path reflectance was not scaled with the surface pressure

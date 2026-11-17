@@ -1320,6 +1320,16 @@ def _water_vapor_residuals_coupled(x, tcwv_grid, Twv_table, Tatm_table, path, wl
             + Solver.interp_linear(tcwv_grid, Twv_table, tcwv) * (a * wl + b) - y)
 
 
+def _water_vapor_residuals_coupled_nonneg(x, tcwv_grid, Twv_table, Tatm_table, path, wl, y):
+    r'''Residuals of the coupled water vapor model with a non-negative surface term (``water_vapor: surface:
+    non_negative``): :math:`T_{atm}(W)\, k\, R_p(\lambda) + T_{wv}(W)\, s(\lambda) - y`, with :math:`s` linear
+    between :math:`s_0 \geq 0` and :math:`s_1 \geq 0` at the ends of the fitted wavelengths'''
+    tcwv, k, s0, s1 = x
+    surface = s0 + (s1 - s0) * (wl - wl[0]) / (wl[-1] - wl[0])
+    return (Solver.interp_linear(tcwv_grid, Tatm_table, tcwv) * k * path
+            + Solver.interp_linear(tcwv_grid, Twv_table, tcwv) * surface - y)
+
+
 def _water_vapor_residuals_prior(x, residuals, args, sigma, prior):
     r'''
     Residuals of a water vapor model weighted by the uncertainty of the reflectance, with the prior of the column
@@ -1346,8 +1356,23 @@ def _water_vapor_lsq(residuals, args, fit, **kwargs):
 
 def _fit_water_vapor_coupled_block(task):
     r'''Coupled water vapor fit of the mega-pixels of a block: array (x, y, 6) with
-    :math:`(W, k, b)` and their standard deviations (the slope :math:`a` is not stored)'''
+    :math:`(W, k, b)` and their standard deviations (the slope :math:`a` is not stored); with the non-negative
+    surface term (``fit['surface'] == 'non_negative'``), :math:`(W, k, s_1)`'''
     spectra, n_water_pixels, fit = task
+    k_min, k_max = fit.get('path_scale_limits', (0., 5.))
+    if fit.get('surface', 'linear') == 'non_negative':
+        # surface values at the ends of the range >= 0, fitted to convergence: the loose tolerances of the
+        # linear model stop the fit early, and with residuals ~1e-5 the gradient test (gtol) of least_squares
+        # stops it at its default 1e-8
+        residuals = _water_vapor_residuals_coupled_nonneg
+        x0 = [fit['x0'][0], min(max(fit['x0'][1], k_min), k_max), 1e-3, 1e-3]
+        options = dict(bounds=([0, k_min, 0, 0], [60, k_max, 1, 1]), gtol=1e-15, max_nfev=200)
+    else:
+        residuals = _water_vapor_residuals_coupled
+        x0 = [fit['x0'][0], min(max(fit['x0'][1], k_min), k_max), *fit['x0'][2:]]
+        options = dict(bounds=([0, k_min, -10, -1], [60, k_max, 1, 1]),
+                       diff_step=1e-2, xtol=1e-2, ftol=1e-2, max_nfev=40)
+    fit = dict(fit, x0=x0)
     nwl, height, width = spectra.shape
     result = np.full((width, height, 6), np.nan)
     for ix in range(width):
@@ -1359,11 +1384,9 @@ def _fit_water_vapor_coupled_block(task):
             if valid.sum() <= 4:
                 continue
             y = y[valid]
-            res_lsq = _water_vapor_lsq(_water_vapor_residuals_coupled,
+            res_lsq = _water_vapor_lsq(residuals,
                                        (fit['tcwv_grid'], fit['Twv_table'][:, valid], fit['Tatm_table'][:, valid],
-                                        fit['path'][valid], fit['wl'][valid], y), fit,
-                                       bounds=([0, 0, -10, -1], [60, 5, 1, 1]),
-                                       diff_step=1e-2, xtol=1e-2, ftol=1e-2, max_nfev=40)
+                                        fit['path'][valid], fit['wl'][valid], y), fit, **options)
             xres = res_lsq.x
             resVariance = (res_lsq.fun ** 2).sum() / max(len(res_lsq.fun) - len(res_lsq.x), 1)
             hess = np.matmul(res_lsq.jac.T, res_lsq.jac)
@@ -1554,7 +1577,12 @@ class WaterVapor(Solver):
       with :math:`R_{path}` the path reflectance of the TOA LUT at the first-guess AOT
       (:py:meth:`path_reflectance_first_guess`), :math:`T_{atm}` the coupled transmittance of all the gases
       (:py:class:`hgrs.gas_coupling.GasTransmittance`), :math:`(W, k, a, b) \in [0, 60] \times [0, 5] \times
-      [-10, 1] \times [-1, 1]` and the first guess of :math:`W` from CAMS;
+      [-10, 1] \times [-1, 1]` and the first guess of :math:`W` from CAMS (2.0.0, ``surface: linear``). With
+      ``surface: non_negative`` (experimental), :math:`a\lambda + b` is replaced by the line between its values
+      :math:`s_0, s_1 \geq 0` at the ends of the range, fitted to convergence: with a surface term of any sign, a
+      negative surface term under a path term above the data makes the bands shallower and :math:`W` too high
+      (+30 kg m-2 at RdP-EsNM). The bounds of :math:`k` are ``path_scale_limits``, and ``offset:
+      saturated_bands`` subtracts the signal above the water vapour (:py:meth:`offset`) from the data;
     * ``gas_coupling: decoupled``: :math:`R(\lambda) \simeq T_{wv}(\lambda; W, \bar M)\, (a\lambda + b)`, with
       :math:`(W, a, b) \in [0, 60] \times [-10, 1] \times [0, 1]`.
 
@@ -1591,6 +1619,7 @@ class WaterVapor(Solver):
 
         self.prod = prod
         self.raster = prod.__dict__[raster_name]
+        self.variable = variable
         self.air_mass = prod.air_mass_mean
         # get data for the subset of "water vapor" wavelengths
         self.parameters = prod.water_parameters.vapor
@@ -1688,6 +1717,25 @@ class WaterVapor(Solver):
         return dict(sigma=settings.reflectance_sigma,
                     prior=(w, max(settings.prior_sigma_relative * w, settings.prior_sigma_min)))
 
+    def offset(self):
+        r'''
+        Signal above the water vapour (setting ``water_vapor: offset: saturated_bands``, experimental): median
+        reflectance of the bands of ``offset_wavelengths_nm`` (1360-1395 nm, where the water vapour absorbs all
+        the light from below) in each mega-pixel, array (y, x), 0 where it is not finite; None with
+        ``offset: none`` (default) or when the sensor has no band in the range.
+        '''
+        settings = self.parameters
+        if settings.offset == 'none':
+            return None
+        bands = self.raster[self.variable].sel(wl=slice(*settings.offset_wavelengths_nm))
+        if bands.sizes['wl'] == 0:
+            logger.warning('water vapor offset: no band in %s nm, fit without offset', settings.offset_wavelengths_nm)
+            return None
+        offset = np.nan_to_num(bands.median('wl', skipna=True).transpose('y', 'x').values, nan=0.)
+        logger.info('water vapor offset (saturated bands %s nm): median %.4f', settings.offset_wavelengths_nm,
+                    float(np.median(offset)))
+        return offset
+
     def solve(self, x0=None, pool=None):
         r'''
         Run the fit on every mega-pixel with enough water pixels (parallel processing of blocks of
@@ -1706,6 +1754,9 @@ class WaterVapor(Solver):
             water_pixel_number = None
         # numpy arrays: xarray indexing of each mega-pixel costs more than its fit
         spectra = np.asarray(self.data.transpose('wl', 'y', 'x').values)
+        offset = self.offset()
+        if offset is not None:
+            spectra = spectra - offset[None]
         if self.coupled:
             # T_atm(W) k R_p + T_wv(W) (a wl + b): first guess W from CAMS, k = 1 (LUT path reflectance), no
             # surface term
@@ -1713,7 +1764,8 @@ class WaterVapor(Solver):
             w0 = float(cams.tcwv) if cams is not None and 'tcwv' in cams else x0[0]
             fit = dict(x0=[min(max(w0, 0.5), 59.), 1., 0., 0.], tcwv_grid=self.tcwv_grid, Twv_table=self.Twv_table,
                        Tatm_table=self.Tatm_table, path=self.path_reflectance, wl=self.wl_mic,
-                       pixel_threshold=self.prod.pixel_threshold, regularization=self.regularization())
+                       pixel_threshold=self.prod.pixel_threshold, regularization=self.regularization(),
+                       surface=self.parameters.surface, path_scale_limits=self.parameters.path_scale_limits)
             result = self.fit_blocks(_fit_water_vapor_coupled_block, spectra, water_pixel_number, fit, 6,
                                      self.prod.block_size, pool)
         else:

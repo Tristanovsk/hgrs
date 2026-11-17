@@ -80,6 +80,13 @@ atmospheric_correction:
     prior_sigma_relative: 0.1
     prior_sigma_min: 2.0
     reflectance_sigma: 1.0e-3
+    # coupled model (gas_coupling: path_length), experimental constraints: surface term linear (any sign,
+    # 2.0.0) or non_negative; bounds of the scale factor of the LUT path reflectance; offset (signal above the
+    # water vapour) none or saturated_bands (median of the bands of offset_wavelengths_nm, subtracted)
+    surface: linear
+    path_scale_limits: [0.0, 5.0]
+    offset: none
+    offset_wavelengths_nm: [1360, 1395]
   aerosol:
     # bands fitted by the aerosol and sunglint retrieval (nm, nearest band of the sensor)
     fit_wavelengths_nm: [1000, 1050, 1075, 1100, 1200, 1300, 1600, 1650, 1700, 2150, 2200, 2250]
