@@ -526,6 +526,15 @@ class Process():
                 Ttot_by_aot = Ttot_by_aot.assign_coords(aot_ref=aot_values)
                 Ttot = Ttot_by_aot.sel(aot_ref=aot_field.round(3), method='nearest')
                 Ttot = Ttot.drop_vars('aot_ref', errors='ignore').where(valid_aot)
+        if not behavior.PREVIOUS_BEHAVIOR:
+            # diffuse transmittances at the surface pressure (the LUTs are computed for 1015.2 hPa): half of the change
+            # of the Rayleigh scattering lost for the direct beam, exp(-dtau_r (1 / 2 mu_s + 1 / 2 mu_v))
+            from .hgrs_kernel import LUT_PRESSURE
+            rot = prod.auxdata.rot.interp(wl=wl)
+            dtau = rot * (float(prod.pressure) - LUT_PRESSURE) / prod.auxdata.pressure_rot_ref
+            mu = 0.5 / np.cos(np.radians(sza)) + 0.5 / np.cos(np.radians(vza))
+            factor = xr.DataArray(np.exp(-np.asarray(dtau) * mu), coords={'wl': wl}, dims='wl')
+            Ttot = (Ttot * factor).transpose(*Ttot.dims)
         if 'x' in Ttot.dims:
             # transmittance on the coarse grid, interpolated and applied by blocks (in place, float32):
             # a full-resolution transmittance cube would double the memory of Rrs

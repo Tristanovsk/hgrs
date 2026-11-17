@@ -330,6 +330,33 @@ def coarsen_mean(ds, xcoarsen, ycoarsen):
     return out[list(ds.data_vars)]
 
 
+#: pressure (hPa) of the Rayleigh optical thickness of the OSOAA runs of the LUTs (AP.MOT: Bodhaine et al. 1999 at
+#: 1015.2 hPa, e.g. 0.360251 at 400 nm against 0.359559 at 1013.25 hPa)
+LUT_PRESSURE = 1015.2
+
+
+def rayleigh_pressure_delta(Rray, rot_nodes, pressure, wl):
+    r"""
+    Change of the Rayleigh reflectance of the LUT from :math:`P_0` (``LUT_PRESSURE``) to the surface pressure
+    :math:`P`, :math:`\Delta R_{ray} = R_{ray}\left[(P/P_0)^D - 1\right]` with
+    :math:`D = d\ln R_{ray}/d\ln\tau_r` from the wavelength nodes of the LUT (1 in single scattering, ~0.9 at
+    400 nm); validated with OSOAA runs at +/- 20 hPa in radcalnet_oc (scripts/rayleigh_pressure).
+
+    :param Rray: Rayleigh reflectance of the LUT (aot_ref = 0) at the geometry, on the wavelength nodes (``wl``, nm)
+    :param rot_nodes: Rayleigh optical thickness at the nodes (any reference pressure: only its logarithmic
+        variation with the wavelength is used)
+    :param pressure: surface pressure (hPa)
+    :param wl: wavelengths of the output (nm)
+    """
+    with np.errstate(divide='ignore', invalid='ignore'):
+        D = np.gradient(np.log(np.clip(Rray.values, 1e-12, None)), np.log(rot_nodes), axis=Rray.get_axis_num('wl'))
+    D = Rray.copy(data=np.where(np.isfinite(D), D, 1.))
+    D_wl = D.assign_coords(wl=np.log(D.wl)).interp(wl=np.log(np.asarray(wl)), kwargs={'fill_value': 'extrapolate'})
+    D_wl = D_wl.assign_coords(wl=np.asarray(wl))
+    Rray_wl = _interp_wl_loglog(Rray, wl)
+    return Rray_wl * np.expm1(D_wl * np.log(pressure / LUT_PRESSURE))
+
+
 def _interp_wl_loglog(da, wl, method='quadratic'):
     '''Interpolation of a radiance table in wavelength, in log(value) vs log(wavelength); non-positive values
     fall back to the interpolation in linear space. Output coordinates as ``da.interp(wl=wl)``.'''
@@ -1848,6 +1875,8 @@ class Aerosol(Solver):
         - ``aot_lut``: :math:`\tau_a(\lambda; \tau_{ref})`
         - ``rot``: :math:`\tau_R(\lambda)\, P / P_0`
         - ``sunglint_eps``: :math:`\varepsilon(\lambda)`
+        - ``dRray``: change of the Rayleigh reflectance from the pressure of the LUT to the surface pressure, added to
+          ``Rtoa_lut`` (:py:func:`rayleigh_pressure_delta`; not with the former behavior)
 
         :param wl: wavelengths (nm)
         '''
@@ -1884,6 +1913,17 @@ class Aerosol(Solver):
             .interp(aot_ref=aot_refs, method='quadratic')
             .dropna('aot_ref') / np.cos(np.radians(sza))
         )
+        if not behavior.PREVIOUS_BEHAVIOR:
+            # Rayleigh scattering at the surface pressure (the LUTs are computed for 1015.2 hPa): added to the
+            # path reflectance of all the aot_ref (aerosol-Rayleigh coupling kept)
+            Rray = (
+                self.aero_lut.sel(model=self.aerosol_model).I.sel(aot_ref=0)
+                .interp(vza=vza, azi=raa_lut, method='linear')
+                .interp(sza=sza, method='quadratic').squeeze() / np.cos(np.radians(sza))
+            )
+            rot_nodes = auxdata.rot.interp(wl=Rray.wl.values, kwargs={'fill_value': 'extrapolate'}).values
+            self.dRray = rayleigh_pressure_delta(Rray, rot_nodes, self.pressure, wl)
+            self.Rtoa_lut = self.Rtoa_lut + self.dRray
 
         # numpy LUTs for the fit: with xarray at each evaluation of the cost function and of the
         # constraint, the fit is ~80x slower

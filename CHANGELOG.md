@@ -7,6 +7,14 @@ All notable changes to hGRS are listed here, most recent first. The format follo
 ## [Unreleased]
 
 ### Added
+- Pressure scaling of the Rayleigh scattering of the path reflectance (current behavior; not with
+  `previous_behavior`; branch `feature/rayleigh_pressure`): the LUTs are OSOAA runs with the Rayleigh optical
+  thickness of 1015.2 hPa (`LUT_PRESSURE`), and the path reflectance was not scaled with the surface pressure
+  (+/-2.7e-3 at 400 nm, +/-1.2e-3 at 500 nm for +/-20 hPa, +0.3e-3 at 400 nm at 1013 hPa). `Aerosol.prepare_lut` adds
+  `dRray` = R_ray [(P/P_LUT)^D - 1] (`rayleigh_pressure_delta`, D = dln R_ray / dln tau_r from the wavelength nodes of
+  the LUT, 0.90 at 400 nm) to `Rtoa_lut` (aerosol fit and atmospheric image), and the final transmittance of the Rrs
+  is multiplied by exp(-dtau_r (1/2mu_s + 1/2mu_v)); validated with OSOAA runs at +/-20 hPa in radcalnet_oc
+  (`scripts/rayleigh_pressure`).
 - EnMAP, experimental: correction of the radiometric mismatch of the VNIR and SWIR detectors over dark water,
   `product: enmap_detector_offset: none | vnir_ramp | swir_ramp` (`none` by default, products unchanged). The
   offset SWIR - VNIR is the median over the water pixels of the scene at the VNIR band nearest to 990 nm
