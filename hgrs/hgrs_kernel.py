@@ -1323,9 +1323,13 @@ def _water_vapor_residuals_coupled(x, tcwv_grid, Twv_table, Tatm_table, path, wl
 def _water_vapor_residuals_coupled_nonneg(x, tcwv_grid, Twv_table, Tatm_table, path, wl, y):
     r'''Residuals of the coupled water vapor model with a non-negative surface term (``water_vapor: surface:
     non_negative``): :math:`T_{atm}(W)\, k\, R_p(\lambda) + T_{wv}(W)\, s(\lambda) - y`, with :math:`s` linear
-    between :math:`s_0 \geq 0` and :math:`s_1 \geq 0` at the ends of the fitted wavelengths'''
-    tcwv, k, s0, s1 = x
+    between :math:`s_0 \geq 0` and :math:`s_1 \geq 0` at the ends of the fitted wavelengths; with a fifth parameter
+    :math:`\Delta n` (``water_vapor: path_slope: free``), the path reflectance is :math:`k\, R_p(\lambda)\,
+    \lambda^{-\Delta n}` (:math:`\lambda` in µm)'''
+    tcwv, k, s0, s1 = x[:4]
     surface = s0 + (s1 - s0) * (wl - wl[0]) / (wl[-1] - wl[0])
+    if len(x) > 4:
+        path = path * wl ** -x[4]
     return (Solver.interp_linear(tcwv_grid, Tatm_table, tcwv) * k * path
             + Solver.interp_linear(tcwv_grid, Twv_table, tcwv) * surface - y)
 
@@ -1366,7 +1370,14 @@ def _fit_water_vapor_coupled_block(task):
         # stops it at its default 1e-8
         residuals = _water_vapor_residuals_coupled_nonneg
         x0 = [fit['x0'][0], min(max(fit['x0'][1], k_min), k_max), 1e-3, 1e-3]
-        options = dict(bounds=([0, k_min, 0, 0], [60, k_max, 1, 1]), gtol=1e-15, max_nfev=200)
+        lower, upper = [0, k_min, 0, 0], [60, k_max, 1, 1]
+        if fit.get('path_slope', 'fixed') == 'free':
+            # spectral slope of the path reflectance free: the LUT shape (first-guess aerosol model and AOT)
+            # can differ from that of the scene, and the surface term then corrects the continuum slope with
+            # the deeper bands of the direct beam, which lowers W
+            n_min, n_max = fit['path_slope_limits']
+            x0, lower, upper = x0 + [min(max(0., n_min), n_max)], lower + [n_min], upper + [n_max]
+        options = dict(bounds=(lower, upper), gtol=1e-15, max_nfev=200)
     else:
         residuals = _water_vapor_residuals_coupled
         x0 = [fit['x0'][0], min(max(fit['x0'][1], k_min), k_max), *fit['x0'][2:]]
@@ -1581,7 +1592,9 @@ class WaterVapor(Solver):
       ``surface: non_negative`` (experimental), :math:`a\lambda + b` is replaced by the line between its values
       :math:`s_0, s_1 \geq 0` at the ends of the range, fitted to convergence: with a surface term of any sign, a
       negative surface term under a path term above the data makes the bands shallower and :math:`W` too high
-      (+30 kg m-2 at RdP-EsNM). The bounds of :math:`k` are ``path_scale_limits``, and ``offset:
+      (+30 kg m-2 at RdP-EsNM). With ``path_slope: free``, the path reflectance is :math:`k R_{path}
+      \lambda^{-\Delta n}`, :math:`\Delta n` in ``path_slope_limits``. The bounds of :math:`k` are
+      ``path_scale_limits``, and ``offset:
       saturated_bands`` subtracts the signal above the water vapour (:py:meth:`offset`) from the data;
     * ``gas_coupling: decoupled``: :math:`R(\lambda) \simeq T_{wv}(\lambda; W, \bar M)\, (a\lambda + b)`, with
       :math:`(W, a, b) \in [0, 60] \times [-10, 1] \times [0, 1]`.
@@ -1765,7 +1778,8 @@ class WaterVapor(Solver):
             fit = dict(x0=[min(max(w0, 0.5), 59.), 1., 0., 0.], tcwv_grid=self.tcwv_grid, Twv_table=self.Twv_table,
                        Tatm_table=self.Tatm_table, path=self.path_reflectance, wl=self.wl_mic,
                        pixel_threshold=self.prod.pixel_threshold, regularization=self.regularization(),
-                       surface=self.parameters.surface, path_scale_limits=self.parameters.path_scale_limits)
+                       surface=self.parameters.surface, path_scale_limits=self.parameters.path_scale_limits,
+                       path_slope=self.parameters.path_slope, path_slope_limits=self.parameters.path_slope_limits)
             result = self.fit_blocks(_fit_water_vapor_coupled_block, spectra, water_pixel_number, fit, 6,
                                      self.prod.block_size, pool)
         else:

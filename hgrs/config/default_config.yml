@@ -85,6 +85,9 @@ atmospheric_correction:
     # water vapour) none or saturated_bands (median of the bands of offset_wavelengths_nm, subtracted)
     surface: linear
     path_scale_limits: [0.0, 5.0]
+    # spectral slope of the path reflectance (surface: non_negative only): fixed (LUT) or free (k R_path wl^-dn)
+    path_slope: fixed
+    path_slope_limits: [-4.0, 4.0]
     offset: none
     offset_wavelengths_nm: [1360, 1395]
   aerosol:

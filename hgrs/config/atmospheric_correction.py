@@ -10,6 +10,7 @@ AEROSOL_PRIORS = ("none", "cams")
 WATER_VAPOR_PRIORS = ("none", "cams")
 WATER_VAPOR_SURFACES = ("linear", "non_negative")
 WATER_VAPOR_OFFSETS = ("none", "saturated_bands")
+WATER_VAPOR_PATH_SLOPES = ("fixed", "free")
 NONNEGATIVITY_MODES = ("hard", "soft")
 
 
@@ -100,6 +101,10 @@ class WaterVaporConfig:
     surface: str = "linear"
     # bounds of the scale factor k of the LUT path reflectance in the coupled model ((0, 5) in 2.0.0)
     path_scale_limits: tuple[float, float] = (0.0, 5.0)
+    # spectral slope of the path reflectance with surface: non_negative: 'fixed' (shape of the LUT) or 'free'
+    # (k R_path wl^-dn, wl in micron, dn in path_slope_limits)
+    path_slope: str = "fixed"
+    path_slope_limits: tuple[float, float] = (-4.0, 4.0)
     # signal above the water vapour (thin cirrus, stray light), subtracted from the data before the fit:
     # 'none' or 'saturated_bands' (median reflectance of the bands of offset_wavelengths_nm in each mega-pixel)
     offset: str = "none"
@@ -112,6 +117,12 @@ class WaterVaporConfig:
             raise ValueError(f"water_vapor: surface must be one of {WATER_VAPOR_SURFACES}, not {self.surface!r}")
         if self.offset not in WATER_VAPOR_OFFSETS:
             raise ValueError(f"water_vapor: offset must be one of {WATER_VAPOR_OFFSETS}, not {self.offset!r}")
+        if self.path_slope not in WATER_VAPOR_PATH_SLOPES:
+            raise ValueError(f"water_vapor: path_slope must be one of {WATER_VAPOR_PATH_SLOPES}, not {self.path_slope!r}")
+        if self.path_slope == "free" and self.surface != "non_negative":
+            raise ValueError("water_vapor: path_slope: free requires surface: non_negative")
+        if not self.path_slope_limits[0] < self.path_slope_limits[1]:
+            raise ValueError("water_vapor: path_slope_limits must be (dn_min, dn_max) with dn_min < dn_max")
         k_min, k_max = self.path_scale_limits
         if not 0 <= k_min < k_max:
             raise ValueError("water_vapor: path_scale_limits must be (k_min, k_max) with 0 <= k_min < k_max")
@@ -126,7 +137,7 @@ class WaterVaporConfig:
                 config,
                 cls,
                 tuple_fields=("wavelengths_nm", "first_guess", "smoothing_window", "path_scale_limits",
-                              "offset_wavelengths_nm"),
+                              "offset_wavelengths_nm", "path_slope_limits"),
             )
         )
 

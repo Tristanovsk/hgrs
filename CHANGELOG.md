@@ -16,7 +16,10 @@ All notable changes to hGRS are listed here, most recent first. The format follo
   each mega-pixel. With a surface term of any sign the fit can put the path term above the data (k R_p up to
   2x the signal) and a negative surface term under it, whose deeper bands make the sum shallower: W is then too
   high (RdP-EsNM 33-47 against 6-14 kg m-2 from AERONET, Lake Okeechobee 52 against 9, Banana River 29
-  against 6).
+  against 6). `path_slope: free` (with `surface: non_negative`) multiplies the path reflectance by wl^-dn, dn in
+  `path_slope_limits` ([-4, 4]): with the LUT shape of the first-guess aerosol model and AOT, the surface term
+  takes 15-40 % of the signal at 1040 nm over dark water to correct the slope of the continuum, and its
+  direct-beam bands lower W (0.65 of AERONET, median of 9 dark matchups; 0.79 with the free slope).
 - Pressure scaling of the Rayleigh scattering of the path reflectance (current behavior; not with
   `previous_behavior`; branch `feature/rayleigh_pressure`): the LUTs are OSOAA runs with the Rayleigh optical
   thickness of 1015.2 hPa (`LUT_PRESSURE`), and the path reflectance was not scaled with the surface pressure
