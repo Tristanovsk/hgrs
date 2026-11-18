@@ -20,6 +20,12 @@ All notable changes to hGRS are listed here, most recent first. The format follo
   `path_slope_limits` ([-4, 4]): with the LUT shape of the first-guess aerosol model and AOT, the surface term
   takes 15-40 % of the signal at 1040 nm over dark water to correct the slope of the continuum, and its
   direct-beam bands lower W (0.65 of AERONET, median of 9 dark matchups; 0.79 with the free slope).
+  `path_scale_limits` must leave room for a first-guess AOT far from the truth: with [0.5, 2] W reaches 60 at
+  Banana River (CAMS AOT550 0.21-0.37 against 0.05-0.08 from AERONET, LUT path reflectance ~3x the signal, k
+  needs ~0.3 and the fit lowers the model by absorption), and [0.2, 3] gives 9.3-9.5 against 14.7-15.9 (3
+  other matchups change by 0.5-7 kg m-2, MVCO and Chesapeake Bay). AERONET-OC validation (64 matchups,
+  `surface: non_negative`, `path_slope: free`, `path_scale_limits: [0.2, 3]`): TCWV bias -1.8 kg m-2, RMSD 5.4
+  (2.0.0: -0.8, 10.3; CAMS prior: +0.8, 3.8), 0.73 of AERONET below 10 kg m-2.
 - Pressure scaling of the Rayleigh scattering of the path reflectance (current behavior; not with
   `previous_behavior`; branch `feature/rayleigh_pressure`): the LUTs are OSOAA runs with the Rayleigh optical
   thickness of 1015.2 hPa (`LUT_PRESSURE`), and the path reflectance was not scaled with the surface pressure
