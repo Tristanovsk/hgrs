@@ -71,3 +71,30 @@ def test_prepare_lut(previous, monkeypatch):
         assert np.allclose(diff, diff[0][None, :])
         assert (diff < 0).all() and diff[0, 0] < diff[0, 1] < diff[0, 2]
         np.testing.assert_allclose(low.model.Rdiff_table - ref.model.Rdiff_table, diff)
+
+
+@pytest.mark.parametrize('previous', [False, True])
+@pytest.mark.parametrize('pressure', [LUT_PRESSURE, 995.2])
+def test_water_vapor_path_reflectance_as_aerosol_fit(previous, pressure, monkeypatch):
+    """Path term of the coupled water vapor model: the path reflectance of the aerosol fit (log-log wavelength
+    interpolation and pressure term); quadratic in linear space without the pressure term (former behavior)."""
+    monkeypatch.setattr(behavior, 'PREVIOUS_BEHAVIOR', previous)
+    aero = _aerosol(pressure)
+    prod = SimpleNamespace(aero_lut=aero.aero_lut, aerosol_parameters=SimpleNamespace(aerosol_model='M'),
+                           sza_mean=aero.sza, vza_mean=aero.vza, raa_mean=(180 - aero.raa_lut) % 360,
+                           auxdata=aero.auxdata, pressure=pressure)
+    wl = np.linspace(931., 1060., 12)
+    wv = SimpleNamespace(wl=xr.DataArray(wl, coords={'wl': wl}, dims='wl'))
+    aot = 0.1
+    path = hgrs_kernel.WaterVapor.path_reflectance_first_guess(wv, prod, aot)
+    I = aero.aero_lut.I.sel(model='M').interp(vza=aero.vza, azi=aero.raa_lut).interp(sza=aero.sza, method='quadratic')
+    linear = (I.interp(aot_ref=aot).interp(wl=wl, method='quadratic') / np.cos(np.radians(aero.sza))).values
+    if previous:
+        np.testing.assert_allclose(path, linear, rtol=1e-12)
+    else:
+        aero.wl_sunglint = [wl[-1]]
+        aero.prepare_lut(wl)
+        # prepare_lut interpolates in wavelength (log-log) before aot_ref, the water vapor path after: the
+        # log-log interpolation of a sum does not commute with that in aot_ref (1e-6 here)
+        np.testing.assert_allclose(path, aero.Rtoa_lut.interp(aot_ref=aot).values, rtol=1e-5)
+        assert np.abs(path / linear - 1).max() > 1e-3

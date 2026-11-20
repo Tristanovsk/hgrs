@@ -94,6 +94,12 @@ Each fix changes the products; `previous_behavior` restores the former processin
   that each wavelength comes from one detector, as for EnMAP.
 - Aerosol LUT: radiances interpolated in wavelength quadratically in log-log (power law of the wavelength) instead
   of linear space (leave-one-out on the OSOAA LUT: ~1 % error instead of ~10 % in the visible).
+- Water vapor, coupled model (`gas_coupling: path_length`): the path reflectance of the TOA LUT at the first-guess
+  AOT (`WaterVapor.path_reflectance_first_guess`) is now that of the aerosol fit, interpolated in wavelength in
+  log-log space and with the Rayleigh scattering at the surface pressure; it was still interpolated in linear space
+  without the pressure term. Between the LUT nodes 1000 and 1600 nm the former shape was off by -2.5 to +0.8 % over
+  931-1060 nm at AOT 0.05 (-1.1 to +0.3 % at 0.2; ARCT and MACL models), up to 0.8 % once the scale k and a free
+  path slope absorb it; the pressure term is negligible there. Found by the comparison with radcalnet_oc 1.2.
 - OmniCloudMask: run with the NIR at 865 nm and at 940 nm, a pixel is masked only where both runs flag it. With
   940 nm alone the input depended on the water vapour and gave wrong shadows; with 865 nm alone clear dark water
   was flagged as thin cloud (AAOT 2025-07-04 masked entirely). On 89 AERONET-OC crops: 5.0 % of the water

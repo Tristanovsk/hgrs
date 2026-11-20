@@ -1674,13 +1674,26 @@ class WaterVapor(Solver):
     def path_reflectance_first_guess(self, prod, aot550):
         r'''Path reflectance :math:`R_{diff}(\lambda)` of the TOA LUT (aerosol model of the scene, mean angles) at
         the first-guess AOT, on the wavelengths of the fit: spectral shape of the path term of the coupled
-        water vapor model'''
+        water vapor model.
+
+        As the path reflectance of the aerosol fit (:py:meth:`Aerosol.prepare_lut`): interpolated in wavelength
+        quadratically in log-log space and with the Rayleigh scattering at the surface pressure
+        (:py:func:`rayleigh_pressure_delta`); quadratic in linear space without the pressure term with the former
+        behavior. Between the LUT nodes 1000 and 1600 nm the linear interpolation distorts the shape by -2.5 to
+        +0.8 % over 931-1060 nm (AOT 0.05).'''
         sza, vza = prod.sza_mean, prod.vza_mean
         raa_lut = (180 - prod.raa_mean) % 360
+        mu_s = np.cos(np.radians(sza))
+        wl = self.wl.values
         I = (prod.aero_lut.sel(model=prod.aerosol_parameters.aerosol_model).I
              .interp(vza=vza, azi=raa_lut, method='linear').interp(sza=sza, method='quadratic').squeeze())
-        R = I.interp(aot_ref=aot550, method='linear').interp(wl=self.wl.values, method='quadratic')
-        return (R / np.cos(np.radians(sza))).values
+        R = I.interp(aot_ref=aot550, method='linear')
+        if behavior.PREVIOUS_BEHAVIOR:
+            return (R.interp(wl=wl, method='quadratic') / mu_s).values
+        Rray = I.sel(aot_ref=0) / mu_s
+        rot_nodes = prod.auxdata.rot.interp(wl=Rray.wl.values, kwargs={'fill_value': 'extrapolate'}).values
+        dRray = rayleigh_pressure_delta(Rray, rot_nodes, prod.pressure, wl)
+        return (_interp_wl_loglog(R, wl) / mu_s + dRray).values
 
     def interp_tcwv(self, Twv_table, tcwv):
         r'''
