@@ -23,6 +23,7 @@ opj = os.path.join
 dir, filename = os.path.split(__file__)
 
 thuillier_file = str(files(__package__)/ 'data/aux/ref_atlas_thuillier3.nc')
+thuillier2003_file = str(files(__package__)/ 'data/aux/Thuillier_2003_0.3nm.dat')
 gueymard_file = str(files(__package__)/ 'data/aux/NewGuey2003.dat')
 kurucz_file = str(files(__package__)/ 'data/aux/kurucz_0.1nm.dat')
 tsis_file = str(files(__package__)/'data/aux/hybrid_reference_spectrum_p1nm_resolution_c2022-11-30_with_unc.nc')
@@ -82,10 +83,32 @@ class AuxData():
         self.rot = data.set_index('wl').to_xarray().rot
 
 
+#: names of the solar spectra of :py:class:`SolarIrradiance` and their references
+SOLAR_SPECTRA = {
+    'tsis': 'Coddington, O. M., et al. (2021). The TSIS-1 hybrid solar reference spectrum. Geophys. Res. '
+            'Lett., 48(12), e2020GL091709. https://doi.org/10.1029/2020GL091709',
+    'thuillier2003': 'Thuillier, G., et al. (2003). The solar spectral irradiance from 200 to 2400 nm as '
+                     'measured by the SOLSPEC spectrometer from the ATLAS and EURECA missions. Solar Physics, '
+                     '214, 1-22. https://doi.org/10.1023/A:1024048429145',
+    'thuillier': 'ATLAS3: Thuillier, G., et al. (2004). Solar irradiance reference spectra for two solar active '
+                 'levels. Adv. Space Res., 34(2), 256-261. https://doi.org/10.1016/j.asr.2002.12.004',
+    'gueymard': 'Gueymard, C. A. (2004). Solar Energy, 76(4), 423-453. '
+                'https://doi.org/10.1016/j.solener.2003.08.039',
+    'kurucz': 'Kurucz, R. L. (1992). Synthetic infrared spectra. IAU Symposium 154, Kluwer, 523-531.',
+}
+
+
 class SolarIrradiance():
     '''
     Extraterrestrial solar irradiance spectra (mW m-2 nm-1, 300-2600 nm): TSIS-1 hybrid reference
-    spectrum (``tsis``, used by hGRS), Thuillier, Gueymard and Kurucz.
+    spectrum (``tsis``, used by hGRS by default), Thuillier et al. (2003) composite (``thuillier2003``),
+    ATLAS3 (``thuillier``), Gueymard and Kurucz. :py:meth:`get` returns one of them by its name
+    (:py:data:`SOLAR_SPECTRA`), with the name and the reference in its attributes.
+
+    ``thuillier`` is the ATLAS3 spectrum (``ref_atlas_thuillier3.nc``, SOLID), not the Thuillier et al.
+    (2003) composite: it is 1.4 % above the composite from 500 to 2400 nm (1.1 % at 400-500 nm). The
+    composite (``thuillier2003``, 0.3 nm, 200-2397 nm, OBPG copy) is the spectrum of the Sentinel-2 L1C
+    solar irradiances and of the Sentinel-3 OLCI processing; TSIS-1 is the CEOS recommendation (2022).
 
     Examples
     --------
@@ -103,6 +126,9 @@ class SolarIrradiance():
     * Thuillier, G., Hersé, M., Labs, D., et al. (2003). The solar spectral irradiance from 200 to
       2400 nm as measured by the SOLSPEC spectrometer from the ATLAS and EURECA missions. *Solar
       Physics*, 214, 1-22. https://doi.org/10.1023/A:1024048429145
+    * Thuillier, G., Floyd, L., Woods, T. N., et al. (2004). Solar irradiance reference spectra for two
+      solar active levels. *Advances in Space Research*, 34(2), 256-261 (ATLAS3).
+      https://doi.org/10.1016/j.asr.2002.12.004
     * Gueymard, C. A. (2004). The sun's total and spectral irradiance for solar energy applications and
       solar radiation models. *Solar Energy*, 76(4), 423-453. https://doi.org/10.1016/j.solener.2003.08.039
     * Kurucz, R. L. (1992). Synthetic infrared spectra. In D. M. Rabin, J. T. Jefferies (eds.),
@@ -117,7 +143,29 @@ class SolarIrradiance():
         self.gueymard = self.read_gueymard()
         self.kurucz = self.read_kurucz()
         self.thuillier = self.read_thuillier()
+        self.thuillier2003 = self.read_thuillier2003()
         self.tsis = self.read_tsis()
+
+    def get(self, name):
+        '''
+        Solar irradiance spectrum by its name.
+
+        :param name: one of :py:data:`SOLAR_SPECTRA` (``'tsis'``, ``'thuillier2003'``, ``'thuillier'``,
+            ``'gueymard'``, ``'kurucz'``)
+        :return: spectral irradiance (DataArray, wl in nm, mW m-2 nm-1) with the attributes
+            ``solar_spectrum`` (name) and ``solar_spectrum_reference``
+        :raises ValueError: if the name is unknown
+
+        >>> F0 = SolarIrradiance().get('thuillier2003')
+        >>> F0.attrs['solar_spectrum']
+        'thuillier2003'
+        '''
+        if name not in SOLAR_SPECTRA:
+            raise ValueError(f'unknown solar spectrum {name!r}; available: {", ".join(SOLAR_SPECTRA)}')
+        F0 = getattr(self, name).copy()
+        F0.attrs.update(units='mW m-2 nm-1', solar_spectrum=name,
+                        solar_spectrum_reference=SOLAR_SPECTRA[name])
+        return F0
 
     def read_tsis(self):
         '''
@@ -137,9 +185,23 @@ class SolarIrradiance():
                                       '48(12), e2020GL091709. https://doi.org/10.1029/2020GL091709'
         return tsis.SSI.sel(wl=slice(self.wl_min,self.wl_max))
 
+    def read_thuillier2003(self):
+        '''
+        Open the Thuillier et al. (2003) composite spectrum (0.3 nm, OBPG copy) in mW/m2/nm
+
+        :return: spectral irradiance (DataArray, wl in nm)
+        '''
+        wl, irr = np.loadtxt(thuillier2003_file, comments=['/', '!'], unpack=True)
+        solar_irr = xr.DataArray(irr, coords={'wl': wl}, dims='wl')
+        solar_irr = solar_irr[(solar_irr.wl <= self.wl_max) & (solar_irr.wl >= self.wl_min)]
+        solar_irr.attrs['units'] = 'mW/m2/nm'
+        solar_irr.attrs['reference'] = SOLAR_SPECTRA['thuillier2003']
+        return solar_irr
+
     def read_thuillier(self):
         '''
-        Open Thuillier data and convert them into xarray in mW/m2/nm
+        Open the ATLAS3 spectrum (``ref_atlas_thuillier3.nc``, Thuillier et al., 2004), 1.4 % above the
+        Thuillier et al. (2003) composite (:py:meth:`read_thuillier2003`), in mW/m2/nm
 
         :return: spectral irradiance (DataArray, wl in nm)
         '''
@@ -148,6 +210,7 @@ class SolarIrradiance():
         # keep spectral range of interest UV-SWIR
         solar_irr = solar_irr[(solar_irr.wl <= self.wl_max) & (solar_irr.wl >= self.wl_min)]
         solar_irr.attrs['units'] = 'mW/m2/nm'
+        solar_irr.attrs['reference'] = SOLAR_SPECTRA['thuillier']
         return solar_irr
 
     def read_gueymard(self):
@@ -190,6 +253,7 @@ class SolarIrradiance():
         :return: update variables of the class
         '''
         self.thuillier = self.thuillier.interp(wl=wl)
+        self.thuillier2003 = self.thuillier2003.interp(wl=wl)
         self.gueymard = self.gueymard.interp(wl=wl)
 
     @staticmethod

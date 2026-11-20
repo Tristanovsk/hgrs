@@ -8,8 +8,7 @@ import h5netcdf
 import numpy as np
 import xarray as xr
 
-from ..auxdata import SolarIrradiance
-from ..utils import Misc, Reproj
+from ..utils import Reproj
 from ..config import SceneMetadata, SensorDescription
 from ..spectral_sensitivity import Gaussian
 from .base import L1Driver
@@ -124,7 +123,7 @@ class EmitDriver(L1Driver):
         # the original UTC offset remains explicit in acquisition_date.
         time_coord = np.datetime64(date.replace(tzinfo=None), 'us')
         sensor = SensorDescription(name='EMIT', sensor_mod=Gaussian(wavelengths, fwhm))
-        solar = SolarIrradiance().tsis * Misc.earth_sun_correction(date.timetuple().tm_yday)
+        solar = self.solar_irradiance(date.timetuple().tm_yday)
         f0 = sensor.convolve(solar, solar_irradiance=True).rename({'wl_sensor': 'wl'})
         sza_value = 90.0 - angles['sun_elevation']
         vza_value = angles['view_zenith']
@@ -182,6 +181,7 @@ class EmitDriver(L1Driver):
         data = data.transpose('wl', 'y', 'x', missing_dims='ignore')
         for name, unit in [('F0', 'mW/m2/nm'), ('fwhm', 'nm'), ('Rtoa', '-')]:
             data[name].attrs['unit'] = unit
+        data.F0.attrs.update(self.f0_attrs())
         self.sensor_description = sensor
         self.scene_metadata = SceneMetadata(
             platform='EMIT', acquisition_time=date, solar_zenith=data.sza,

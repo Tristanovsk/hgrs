@@ -9,8 +9,7 @@ import xarray as xr
 
 from netCDF4 import Dataset as _Dataset
 from scipy.ndimage import binary_dilation as _binary_dilation, median_filter as _median_filter
-from ..auxdata import SolarIrradiance as _SolarIrradiance
-from ..utils import Misc as _Misc, Reproj as _Reproj
+from ..utils import Reproj as _Reproj
 from ..config import SceneMetadata as _SceneMetadata, SensorDescription as _SensorDescription
 from ..spectral_sensitivity import Gaussian as _Gaussian
 from .base import L1Driver
@@ -378,7 +377,8 @@ class HyperionDriver(L1Driver):
 
         data.F0.attrs.update(
             unit='mW/m2/nm',
-            definition='TSIS solar irradiance adjusted for Earth-Sun distance',
+            definition='Solar irradiance adjusted for Earth-Sun distance',
+            **self.f0_attrs(),
         )
         data.fwhm.attrs.update(unit='nm', definition='Hyperion band full width at half maximum')
         data.Rtoa.attrs.update(unit='-', definition='Top-of-atmosphere reflectance')
@@ -566,10 +566,7 @@ class HyperionDriver(L1Driver):
                 name='Hyperion',
                 sensor_mod=_Gaussian(wavelengths, fwhm),
             )
-            solar_irradiance = (
-                _SolarIrradiance().tsis
-                * _Misc.earth_sun_correction(acquisition_time.timetuple().tm_yday)
-            )
+            solar_irradiance = self.solar_irradiance(acquisition_time.timetuple().tm_yday)
             f0 = self.sensor_description.convolve(
                 solar_irradiance, solar_irradiance=True
             ).rename({'wl_sensor': 'wl'})

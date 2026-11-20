@@ -7,6 +7,19 @@ All notable changes to hGRS are listed here, most recent first. The format follo
 ## [Unreleased]
 
 ### Added
+- Solar spectrum of the L1 drivers (defaults unchanged, products identical; branch `feature/solar_spectrum`):
+  setting `product: solar_spectrum` (`tsis` by default, `thuillier2003`, `thuillier`, `gueymard`, `kurucz`), or
+  the attribute `solar_spectrum` of a driver, for the conversion of the L1 radiance into reflectance by all the
+  drivers (EnMAP, PRISMA, EMIT, Tanager, Hyperion; `L1Driver.solar_irradiance`). New spectrum `thuillier2003`
+  (Thuillier et al. 2003 composite, `data/aux/Thuillier_2003_0.3nm.dat`, shipped but unused so far): the
+  spectrum of the Sentinel-2 L1C solar irradiances (within 0.02 % over the MSI responses) and of OLCI.
+  `SolarIrradiance.get(name)` and `SOLAR_SPECTRA` (name -> reference). `F0` of the L1 product now carries
+  `solar_spectrum`, `solar_spectrum_reference`, `mission_solar_spectrum` and `radiance_calibration`; each
+  driver declares how its mission calibrates the radiance. EnMAP is calibrated with its sun diffuser and the
+  Fontenla et al. (2011) spectrum (de los Reyes et al. 2022), not available in hGRS: its driver logs a warning
+  when converting with another spectrum. On an EnMAP scene, TSIS-1 / Thuillier 2003 over the bands: +0.6 % at
+  443 nm, +3.2 % at 560 nm, -0.8 % at 865 nm, -3.2 / -5.3 % at 1610 / 2190 nm.
+
 - Water vapor, coupled model (`gas_coupling: path_length`), experimental constraints (branch
   `feature/abs_scat_coupling`; defaults unchanged, products identical): `water_vapor: surface: non_negative`
   replaces the surface term a wl + b (any sign) by the line between its values s0, s1 >= 0 at the ends of the
@@ -87,6 +100,9 @@ Each fix changes the products; `previous_behavior` restores the former processin
   masked instead of 9.6 % (865) / 7.1 % (940), station pixels fully masked on 2 crops instead of 6 / 4.
 - Water vapor transmittance: a clear `ValueError` when the water vapor retrieval is NaN everywhere (no water
   pixel left after the cloud and water masks) instead of numpy's "zero-size array to reduction operation fmin".
+- `SolarIrradiance.thuillier` is the ATLAS3 spectrum (`ref_atlas_thuillier3.nc`, Thuillier et al. 2004), 1.4 %
+  above the Thuillier et al. (2003) composite from 500 to 2400 nm: docstring and reference corrected (it
+  cited the 2003 composite); documentation only, products unchanged.
 
 ## [2.0.0] - 2026-11-13
 

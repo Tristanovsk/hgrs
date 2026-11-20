@@ -6,8 +6,7 @@ import numpy as np
 import xarray as xr
 import h5py
 
-from ..auxdata import SolarIrradiance
-from ..utils import Reproj, Misc
+from ..utils import Reproj
 from ..spectral_sensitivity import Gaussian
 from ..config import SensorDescription
 from .base import L1Driver
@@ -73,9 +72,7 @@ class TanagerDriver(L1Driver):
             sensor_mod=Gaussian(wavelengths, fwhm),
 
         )
-        solar_irradiance = SolarIrradiance()
-        solar_distance_factor = Misc.earth_sun_correction(date.timetuple().tm_yday)
-        F0 = solar_irradiance.tsis * solar_distance_factor
+        F0 = self.solar_irradiance(date.timetuple().tm_yday)
         F0_sensor = self.sensor_description.convolve(
             F0, solar_irradiance=True
         ).rename({'wl_sensor': 'wl'})
@@ -124,6 +121,7 @@ class TanagerDriver(L1Driver):
         data.F0.attrs.update(
             unit='mW/m2/nm',
             definition='Solar irradiance corrected for Sun-Earth distance',
+            **self.f0_attrs(),
         )
         if 'Ltoa' in data:
             data.Ltoa.attrs.update(unit='mW/m2/sr/nm', definition='Top-of-atmosphere radiance')

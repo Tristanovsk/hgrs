@@ -75,7 +75,8 @@ TOA reflectance
 
    R_{TOA}(\lambda) = \frac{\pi\, L_{TOA}(\lambda)}{F_0(\lambda)\, \cos\theta_s}
 
-where :math:`F_0` is the TSIS-1 solar irradiance (Coddington et al., 2021), corrected for the
+where :math:`F_0` is the solar irradiance (TSIS-1 by default, Coddington et al., 2021; see `Solar spectrum`_),
+corrected for the
 Earth-Sun distance on the day of the year (DOY)
 
 .. math::
@@ -91,6 +92,25 @@ at half maximum :math:`\Gamma_i`:
 
    X_i = \frac{\int X(\lambda)\, S_i(\lambda)\, d\lambda}{\int S_i(\lambda)\, d\lambda},
    \qquad S_i(\lambda) = \exp\left(-\frac{(\lambda - \lambda_i)^2}{2\sigma_i^2}\right)
+
+Solar spectrum
+~~~~~~~~~~~~~~
+
+The setting ``product: solar_spectrum`` selects :math:`F_0`: ``tsis`` (TSIS-1, default, CEOS recommendation
+since 2022, uncertainty 0.3 % at 460-2365 nm), ``thuillier2003`` (Thuillier et al., 2003, composite of the
+ATLAS and EURECA missions, the spectrum of the Sentinel-2 L1C and Sentinel-3 OLCI processing), ``thuillier``
+(ATLAS3, Thuillier et al., 2004, 1.4 % above the composite from 500 to 2400 nm), ``gueymard`` or ``kurucz``.
+``F0`` of the L1 product carries the name of the spectrum (``solar_spectrum``), its reference and the spectrum of
+the mission calibration (``mission_solar_spectrum``, ``radiance_calibration``).
+
+:math:`R_{TOA}` is free of the solar spectrum only when :math:`F_0` is the spectrum of the radiometric
+calibration. A sensor calibrated in reflectance with a sun diffuser delivers radiance computed with the solar
+spectrum of its processing, and converting it with another one biases :math:`R_{TOA}` by the ratio of the two
+spectra over the band (TSIS-1 / Thuillier 2003: +1 to +3 % in the visible, -3 to -5 % at 1600-2200 nm). EnMAP
+is calibrated with its sun diffuser and the Fontenla et al. (2011) spectrum (de los Reyes et al., 2022), which
+is not available in hGRS (Fontenla / TSIS-1 up to ~6 % below 480 nm, within 2 % elsewhere): its driver logs a
+warning. A sensor calibrated in radiance in the laboratory does not depend on the solar spectrum, and TSIS-1 is
+then the right choice.
 
 EnMAP detector offset
 ~~~~~~~~~~~~~~~~~~~~~
@@ -395,6 +415,13 @@ derives from the GRS algorithm (Harmel et al., 2018).
   https://doi.org/10.1175/1520-0426(1999)016<1854:ORODC>2.0.CO;2
 * Coddington, O. M., Richard, E. C., Harber, D., et al. (2021). The TSIS-1 hybrid solar reference
   spectrum. *Geophysical Research Letters*, 48(12), e2020GL091709. https://doi.org/10.1029/2020GL091709
+* de los Reyes, R., Langheinrich, M., Alonso, K., et al. (2022). Influence of the solar spectra models on
+  PACO atmospheric correction. *Remote Sensing*, 14(17), 4237. https://doi.org/10.3390/rs14174237
+* Thuillier, G., Hersé, M., Labs, D., et al. (2003). The solar spectral irradiance from 200 to 2400 nm as
+  measured by the SOLSPEC spectrometer from the ATLAS and EURECA missions. *Solar Physics*, 214, 1-22.
+  https://doi.org/10.1023/A:1024048429145
+* Thuillier, G., Floyd, L., Woods, T. N., et al. (2004). Solar irradiance reference spectra for two solar
+  active levels. *Advances in Space Research*, 34(2), 256-261. https://doi.org/10.1016/j.asr.2002.12.004
 * Spencer, J. W. (1971). Fourier series representation of the position of the sun. *Search*, 2(5),
   172.
 * Wright, N., Duncan, J. M. A., Callow, J. N., Thompson, S. E., George, R. J. (2025). Training

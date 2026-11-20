@@ -10,8 +10,6 @@ import xarray as xr
 import rioxarray as rxr
 from scipy.interpolate import RegularGridInterpolator
 
-from ..auxdata import SolarIrradiance
-from ..utils import Misc
 from ..spectral_sensitivity import Gaussian
 from ..config import SensorDescription, behavior
 from .base import L1Driver
@@ -88,7 +86,8 @@ class EnmapDriver(L1Driver):
 
        R_{TOA}(\lambda) = \frac{\pi\, L_{TOA}(\lambda)}{F_0(\lambda)\, \cos\theta_s}
 
-    where :math:`F_0` is the TSIS-1 solar irradiance (Coddington et al., 2021) corrected for the
+    where :math:`F_0` is the solar irradiance of the setting ``solar_spectrum`` (TSIS-1 by default,
+    Coddington et al., 2021; :py:meth:`~hgrs.drivers.base.L1Driver.solar_irradiance`) corrected for the
     Earth-Sun distance (:py:meth:`~hgrs.utils.Misc.earth_sun_correction`) and convolved with the
     spectral response of the bands, and :math:`\theta_s` the mean solar zenith angle over the image.
 
@@ -108,7 +107,16 @@ class EnmapDriver(L1Driver):
     * Storch, T., Honold, H.-P., Chabrillat, S., et al. (2023). The EnMAP imaging spectroscopy mission
       towards operations. *Remote Sensing of Environment*, 294, 113632.
       https://doi.org/10.1016/j.rse.2023.113632
+    * de los Reyes, R., Langheinrich, M., Alonso, K., et al. (2022). Influence of the solar spectra models
+      on PACO atmospheric correction. *Remote Sensing*, 14(17), 4237. https://doi.org/10.3390/rs14174237
     '''
+
+    mission_solar_spectrum = 'fontenla2011'
+    radiance_calibration = (
+        'absolute calibration with the on-board sun diffuser: the L1 radiance embeds the Fontenla et al. '
+        '(2011) solar spectrum of the EnMAP processors (de los Reyes et al., 2022, '
+        'https://doi.org/10.3390/rs14174237; EnMAP L2A ATBD EN-PCV-TN-6007), not available in hGRS: '
+        'Fontenla / TSIS-1 up to ~6 % below 480 nm, within 2 % elsewhere')
 
     name = 'enmap'
     platform = 'EnMAP'
@@ -238,14 +246,10 @@ class EnmapDriver(L1Driver):
 
         raa = (saa - vaa) % 360
 
-        solar_irr = SolarIrradiance()
-        F0 = solar_irr.tsis  # thuillier # gueymard # kurucz
-
-        ## Compute irradiance for the Day Of the Year (date of acquisition)
+        ## solar irradiance (setting solar_spectrum) for the Day Of the Year (date of acquisition), corrected
+        ## for the Sun-Earth distance
         DOY = dt.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%f").timetuple().tm_yday
-        # get correction for Sun-Earth distance and correct solar irradiance
-        D2 = Misc.earth_sun_correction(DOY)
-        F0 = F0 * D2
+        F0 = self.solar_irradiance(DOY)
         self.F0 = F0
 
         self.sensor_description = SensorDescription(
@@ -264,7 +268,7 @@ class EnmapDriver(L1Driver):
         ).rename({'wl_sensor': 'wl'})
         F0_sensor.name = 'F0'
         F0_sensor.attrs = {
-            'description': 'Convolved solar irradiance from TSIS data',
+            'description': f'Convolved solar irradiance from {F0.attrs["solar_spectrum"]} data',
             'unit': 'mW/m2/nm',
         }
 
@@ -345,6 +349,7 @@ class EnmapDriver(L1Driver):
         data.Rtoa.attrs['definition'] = 'Reflectance at the Top of the Atmosphere'
         data.Rtoa.attrs['unit'] = '-'
         data.F0.attrs['definition'] = 'Solar irradiance corrected for Sun-Earth distance'
+        data.F0.attrs.update(self.f0_attrs())
         data.Ltoa.attrs['unit'] = 'mW/m2/sr/nm'
         data.Ltoa.attrs['definition'] = 'Top-of-atmosphere radiance'
         data.fwhm.attrs['unit'] = 'nm'

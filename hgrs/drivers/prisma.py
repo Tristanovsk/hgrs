@@ -6,8 +6,7 @@ import numpy as np
 import xarray as xr
 import h5py
 
-from ..auxdata import SolarIrradiance
-from ..utils import Reproj, Misc
+from ..utils import Reproj
 from ..spectral_sensitivity import Gaussian
 from ..config import SensorDescription, behavior
 from .base import L1Driver
@@ -26,7 +25,8 @@ class PrismaDriver(L1Driver):
 
        R_{TOA}(\lambda) = \frac{\pi\, L_{TOA}(\lambda)}{F_0(\lambda)\, \cos\theta_s}
 
-    where :math:`F_0` is the TSIS-1 solar irradiance (Coddington et al., 2021) corrected for the
+    where :math:`F_0` is the solar irradiance of the setting ``solar_spectrum`` (TSIS-1 by default,
+    Coddington et al., 2021; :py:meth:`~hgrs.drivers.base.L1Driver.solar_irradiance`) corrected for the
     Earth-Sun distance (:py:meth:`~hgrs.utils.Misc.earth_sun_correction`) and convolved with the
     spectral response of the bands, and :math:`\theta_s` the solar zenith angle of the scene.
 
@@ -159,21 +159,18 @@ class PrismaDriver(L1Driver):
 
         # solar irradiance convolution to the PRISMA spectral response function and scaled
         # by the day of the year
-        solar_irr = SolarIrradiance()
-        F0 = solar_irr.tsis  # huillier # gueymard # kurucz
         date_str = ds.attrs["Product_StartTime"].decode('UTF-8')
 
         DOY = dt.datetime.strptime(date_str,
                                    "%Y-%m-%dT%H:%M:%S.%f").timetuple().tm_yday
-        # get correction for Sun-Earth distance and correct solar irradiance
-        D2 = Misc.earth_sun_correction(DOY)
-        F0 = F0 * D2
+        # solar irradiance (setting solar_spectrum) corrected for the Sun-Earth distance
+        F0 = self.solar_irradiance(DOY)
         F0_sensor = self.sensor_description.convolve(
             F0, solar_irradiance=True
         ).rename({'wl_sensor': 'wl'})
         F0_sensor.name = 'F0'
         F0_sensor.attrs = {
-            'description': 'Convolved solar irradiance from TSIS data',
+            'description': f'Convolved solar irradiance from {F0.attrs["solar_spectrum"]} data',
             'unit': 'mW/m2/nm',
         }
         # DN to TOA radiance
@@ -223,6 +220,7 @@ class PrismaDriver(L1Driver):
         data.attrs["saa"] = ds.attrs["Sun_azimuth_angle"]
         data.F0.attrs['unit'] = 'mW/m2/nm'
         data.F0.attrs['definition'] = 'Solar irradiance corrected for Sun-Earth distance'
+        data.F0.attrs.update(self.f0_attrs())
 
         # =============================================================================
         # Load masks

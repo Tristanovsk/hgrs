@@ -64,6 +64,9 @@ class ProductCorrectionConfig:
     # tapered linearly to 0 at 2200 nm) or 'vnir_ramp' (offset added to the VNIR, ramped linearly from 0 at
     # 700 nm), see hgrs.drivers.enmap.detector_offset
     enmap_detector_offset: str = "none"
+    # solar spectrum converting the L1 radiance into reflectance (hgrs.auxdata.SOLAR_SPECTRA): 'tsis',
+    # 'thuillier2003', 'thuillier' (ATLAS3), 'gueymard' or 'kurucz'; see hgrs.drivers.base.L1Driver
+    solar_spectrum: str = "tsis"
     prisma_land_mask_enabled: bool = True
     prisma_land_valid_classes: tuple[int, ...] = (0, 5, 6)
     prisma_land_forbidden_classes: tuple[int, ...] = (1, 2, 3, 4, 10)
@@ -374,6 +377,7 @@ class AtmosphericCorrectionConfig:
             "o2_model": ("product", "o2_model"),
             "gas_coupling_table": ("product", "gas_coupling_table"),
             "enmap_detector_offset": ("product", "enmap_detector_offset"),
+            "solar_spectrum": ("product", "solar_spectrum"),
             "aerosol_absorption_scattering_coefficient": (
                 "product", "gas_absorption_scattering_coefficient"
             ),
