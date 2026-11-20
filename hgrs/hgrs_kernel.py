@@ -534,10 +534,6 @@ class Product():
         self.lut_file = self.lut_tables.lut_file
         self.trans_lut_file = self.lut_tables.trans_lut_file
 
-        self.Twv_lut = self.lut_tables.interp_twv(
-            self.wl, self.sensor_description
-        )
-
         self.load_auxiliary_data()
 
 
@@ -550,6 +546,15 @@ class Product():
         # Keep the legacy Product.spectral attribute for notebooks
         self.spectral = Spectral(self.wl, self.fwhm.values)
 
+
+    @property
+    def Twv_lut(self):
+        r'''Water vapor transmittance convolved with the band responses (tcwv, air_mass, wl), at the two air-mass
+        nodes around ``air_mass_mean`` once it is known (all the nodes before; cached by
+        :py:meth:`~hgrs.lut_tables.LUTTables.interp_twv`): interpolated linearly at ``air_mass_mean``, as for the
+        full table'''
+        return self.lut_tables.interp_twv(self.wl, self.sensor_description,
+                                          air_mass=getattr(self, 'air_mass_mean', None))
 
     def load_auxiliary_data(self):
         # get hgrs auxdata
@@ -1646,7 +1651,7 @@ class WaterVapor(Solver):
         # TODO improve to process the air mass raster instead of scalar mean value
         # TODO check impact of method = 'nearest'
         self.Twv_ = prod.lut_tables.interp_twv(
-            self.data.wl, prod.sensor_description
+            self.data.wl, prod.sensor_description, air_mass=self.air_mass
         ).Twv.interp(air_mass=self.air_mass)
         self.Twv_['wl'] = self.Twv_['wl'] / 1000
         self.wl_mic = self.Twv_.wl.values

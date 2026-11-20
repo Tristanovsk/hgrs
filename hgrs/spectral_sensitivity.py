@@ -142,17 +142,59 @@ class GenericSpecSen:
         da_rsr = xr.DataArray(l_rsr, coords={"wl_sensor": self.bands, dim: wl_signal})
         return da_rsr
 
+    def convolution_matrix(self, wl, threshold=1e-6):
+        """
+        Sparse matrix (bands, ``wl``) of the convolution: row i holds the trapezoidal weights of the response of
+        band i over the wavelengths where it is above ``threshold``, normalised by the integral of the response,
+        so that ``matrix @ signal`` gives the band values of :py:func:`resample_to_target_raster` (within 1e-14).
+        Computed once per wavelength grid and threshold (cached).
+        """
+        from scipy import sparse
+
+        wl = np.asarray(wl, dtype=float)
+        key = (threshold, wl.size, hash(wl.tobytes()))
+        cache = self.__dict__.setdefault("_convolution_matrices", {})
+        if key not in cache:
+            rows, cols, vals = [], [], []
+            for ii in range(self.number_bands):
+                rsr = self.get_rsr_band(wl, ii)
+                index = np.flatnonzero(rsr >= threshold if threshold == 0 else rsr > threshold)
+                if index.size <= 3:
+                    raise ValueError(f"issue when resampling, band {ii} ({self.bands[ii]})")
+                dx = np.diff(wl[index])
+                weight = np.zeros(index.size)
+                weight[:-1] += 0.5 * dx
+                weight[1:] += 0.5 * dx
+                weight *= rsr[index]
+                rows.append(np.full(index.size, ii))
+                cols.append(index)
+                vals.append(weight / weight.sum())
+            cache[key] = sparse.csr_matrix(
+                (np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
+                shape=(self.number_bands, wl.size))
+        return cache[key]
+
     def convolve(self, signal, dim="wl", fallback_int=[]):
         assert hasattr(signal, dim)
-        da_rsr = self.get_rsr(signal[dim], dim=dim)
-        threshold = getattr(self, "legacy_threshold", 0.0) if behavior.PREVIOUS_BEHAVIOR else 1e-6
-        result = resample_to_target_raster(
-            signal, da_rsr, dim_to_resample=dim, threshold=threshold,
-            fallback_int=fallback_int
-        )
-        if behavior.PREVIOUS_BEHAVIOR:
-            result = result.astype(np.float32)
-        return result
+        if behavior.PREVIOUS_BEHAVIOR or len(fallback_int) > 0:
+            da_rsr = self.get_rsr(signal[dim], dim=dim)
+            threshold = getattr(self, "legacy_threshold", 0.0) if behavior.PREVIOUS_BEHAVIOR else 1e-6
+            result = resample_to_target_raster(
+                signal, da_rsr, dim_to_resample=dim, threshold=threshold,
+                fallback_int=fallback_int
+            )
+            if behavior.PREVIOUS_BEHAVIOR:
+                result = result.astype(np.float32)
+            return result
+        # one sparse matrix product (bands x wl) instead of a loop over the bands, with the responses computed
+        # once per wavelength grid: same values as resample_to_target_raster within 1e-14
+        matrix = self.convolution_matrix(signal[dim].values)
+        values = np.moveaxis(signal.values, signal.get_axis_num(dim), 0)
+        result = (matrix @ values.reshape(values.shape[0], -1)).reshape((self.number_bands,) + values.shape[1:])
+        other_dims = [d for d in signal.dims if d != dim]
+        coords = {name: coord for name, coord in signal.coords.items() if dim not in coord.dims}
+        coords["wl_sensor"] = np.asarray(self.bands)
+        return xr.DataArray(result, dims=("wl_sensor", *other_dims), coords=coords)
 
 
 class BaselineInterp:

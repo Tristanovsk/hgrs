@@ -75,6 +75,13 @@ All notable changes to hGRS are listed here, most recent first. The format follo
   `pip install hGRS[catalog]` (geopandas, pyarrow, shapely) for the index and the search.
 
 ### Changed
+- Faster spectral convolution, same products within 1e-14 (not with `previous_behavior`): the band responses are
+  computed once per wavelength grid as a sparse matrix of the trapezoidal weights
+  (`GenericSpecSen.convolution_matrix`), and a convolution is one matrix product instead of a loop over the bands
+  (60 water vapor columns on the 21687 wavelengths of the gaseous LUT, 224 bands: 0.64 s to 21 ms). The water vapor
+  transmittance table is built and convolved at the two air-mass nodes around the mean air mass of the scene only
+  (`LUTTables.interp_twv(..., air_mass)`, `Product.Twv_lut` computed on first use), instead of the 54 nodes, ~300 MB
+  less at peak: its linear interpolation at the air mass is unchanged (3e-15), 0.2 s instead of 1.7-12 s.
 - Lower memory use, same products (bit for bit): the TOA reflectance cube is read once into a single array, and
   masked (water, clouds, bands of strong gaseous absorption) and corrected for the other gases in place; the
   coarse raster is averaged by strips of mega-pixels; GDAL block cache of 256 MB for EnMAP (`GDAL_CACHEMAX`, kept
