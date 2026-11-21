@@ -13,8 +13,9 @@ v1.1.2: set windows at [1,1] for filter2D (smoothing), need to improve smoothing
 v1.2.0dev0: merge of antoine_refactor (EMIT, Hyperion, Tanager drivers, configuration package)
 v1.2.0: drivers subpackage (EnMAP, PRISMA, EMIT, Hyperion, Tanager), configuration package and user settings, numpy speed-ups
 v2.0.0: coupling of the gaseous absorption with the scattering (path-length model), line-by-line O2 in the O2-B band, water vapor fit over 931-1060 nm
+v2.1.0: solar spectrum of the L1 drivers, image catalog, experimental priors and EnMAP detector correction, faster convolution and lower memory use
 '''
-__version__ = '2.0.0'
+__version__ = '2.1.0'
 
 from .utils import Reproj, Misc
 from .auxdata import AuxData, SolarIrradiance

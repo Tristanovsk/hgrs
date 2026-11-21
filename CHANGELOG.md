@@ -6,6 +6,8 @@ All notable changes to hGRS are listed here, most recent first. The format follo
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-21
+
 ### Added
 - Solar spectrum of the L1 drivers (defaults unchanged, products identical; branch `feature/solar_spectrum`):
   setting `product: solar_spectrum` (`tsis` by default, `thuillier2003`, `thuillier`, `gueymard`, `kurucz`), or
