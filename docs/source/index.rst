@@ -44,6 +44,7 @@ on the CAMS atmospheric composition.
    tutorials/visualization
    tutorials/grstbx_visualization
    tutorials/prisma_l1_l2a
+   tutorials/prisma_version_comparison
    tutorials/research/index
 
 .. toctree::
