@@ -206,7 +206,9 @@ and :math:`f_{path}` also scales the path reflectance of the aerosol fit. With `
 absorption of the O2-B band (683-702 nm) is computed line by line (HITRAN), averaged in the cells of the gaseous
 LUT, in place of the REPTRAN table, and the O2-A band (755-775 nm) keeps REPTRAN: against the SOS-ABS CKD, the
 band-mean O2 absorption of REPTRAN is 42-72 % too strong in the O2-B band and that of the line-by-line table
-15-18 % too weak in the O2-A band (air masses 1-3.5), which the closure with EnMAP at AERONET-OC stations confirms.
+15-18 % too weak in the O2-A band (air masses 1-3.5). The closure with EnMAP at AERONET-OC stations favours
+REPTRAN in the O2-A band, but partly because the 763.7 nm band of EnMAP reads low
+(:doc:`tutorials/research/o2a_enmap_closure`).
 ``o2_model: lbl`` uses the line-by-line table in both bands. ``gas_coupling: decoupled`` and ``o2_model: reptran``
 give the results of hGRS 1.2.0. The analysis is in the research notebooks (:doc:`tutorials/research/index`).
 
