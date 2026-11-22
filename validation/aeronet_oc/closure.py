@@ -17,9 +17,16 @@ EnMAP and the aerosol model.
 Writes ``OUT_DIR/closure/<matchup>.nc`` (``Rtoa_enmap``, ``Rtoa_enmap_std``, ``Rtoa_<coupling>``,
 ``Ratm_<coupling>``, on the EnMAP bands) and ``OUT_DIR/closure/closure.nc`` (all the matchups).
 
+With ``HGRS_CLOSURE=v12`` (radcalnet_oc >= 1.2), written to ``OUT_DIR/closure_v12``: the AERONET-OC Rrs is
+interpolated within the range of its bands only and extended beyond by radcalnet_oc (``rrs_extension``, pure water
+by default, instead of the linear decrease to 0 at 1100 nm), the Rayleigh scattering is scaled with the pressure
+(radcalnet_oc default), and the direct sun glint (``sunglint='cm_iso_mix'``, wind of AERONET-OC, radcalnet_oc
+default when missing) is added to the TOA reflectance (``Rtoa_<coupling>`` includes it, ``Rglint_<coupling>``).
+
 Usage: python closure.py [n_workers] [matchup_filter]
 '''
 import logging
+import os
 import sys
 import warnings
 from multiprocessing import Pool
@@ -33,7 +40,9 @@ import xarray as xr
 from common import OUT_DIR
 
 warnings.filterwarnings('ignore')
-CLOSURE = OUT_DIR / 'closure'
+V12 = os.environ.get('HGRS_CLOSURE', '') == 'v12'
+CLOSURE = OUT_DIR / ('closure_v12' if V12 else 'closure')
+SUNGLINT = 'cm_iso_mix'
 # gaseous transmittance models: name -> (gas_coupling, o2_model) of radcalnet_oc, or ('hgrs', o2_model,
 # coefficient table) for the transmittances of hgrs.gas_coupling.GasTransmittance (path-length model of the
 # total optical thickness of each channel in the windows of the table)
@@ -106,6 +115,9 @@ def hgrs_gas_transmittance(o2_model, table):
                 da = xr.DataArray(t, coords={'wl': wl.values}, dims='wl')
             return da.expand_dims(time=times.values)
         self.Tg_Ed = wrap(gt.total('Ed', *args(m0)), False)
+        # direct beam along the solar and viewing paths (direct sun glint of radcalnet_oc >= 1.2)
+        self.Tg_d = self.Tg_Ed
+        self.Tg_u = wrap(np.stack([gt.total('Ed', *args(1. / u)) for u in muv]), True)
         self.Tg_atm = wrap(np.stack([gt.total('atm', *args(m0 + 1. / u)) for u in muv]), True)
         self.Tg_w = wrap(np.stack([gt.total('w', *args(m0 + 1. / u)) for u in muv]), True)
     return get_gas_transmittance
@@ -120,8 +132,14 @@ def simulate(aer, enmap, coupling, o2_model='lbl', table=None):
         o2_model = 'lbl'
     logging.getLogger().setLevel(logging.WARNING)
     t = pd.Timestamp(aer.time.values)
-    wl_rrs = np.arange(350., 2501., 1.)
-    rrs = hyperspectral_rrs(aer.wl_aeronet.values, aer.Rrs.values, wl_rrs)
+    if V12:
+        # within the range of the AERONET-OC bands; radcalnet_oc extends it (rrs_extension)
+        wl_ok = aer.wl_aeronet.values[np.isfinite(aer.Rrs.values)]
+        wl_rrs = np.arange(350., np.floor(wl_ok.max()) + 1., 1.)
+        rrs = np.interp(wl_rrs, wl_ok, np.clip(aer.Rrs.values[np.isfinite(aer.Rrs.values)], 0, None))
+    else:
+        wl_rrs = np.arange(350., 2501., 1.)
+        rrs = hyperspectral_rrs(aer.wl_aeronet.values, aer.Rrs.values, wl_rrs)
     aot = aer.aot.dropna('wl_aeronet').reset_coords(drop=True)
     # the measurement is given twice (1 s apart): radcalnet_oc squeezes its LUT, which fails with one time
     times = [t, t + pd.Timedelta(seconds=1)]
@@ -134,6 +152,8 @@ def simulate(aer, enmap, coupling, o2_model='lbl', table=None):
              aot550=two(float(aer.aot550)), aot865=two(float(aer.aot865)), ang_exp=two(float(aer.ang_exp)),
              Rrs=(('time', 'wl'), np.stack([rrs, rrs]))),
         coords=dict(time=times, wl=wl_rrs))
+    if V12 and 'wind' in aer and np.isfinite(aer.wind):
+        inp['wind'] = two(float(aer.wind))
     inp['naot'] = naot
     # relative azimuth of radcalnet_oc: 0 deg towards the Sun (hGRS: raa_lut = (180 - raa) % 360)
     azi = (180. - float(enmap.raa)) % 360.
@@ -146,8 +166,10 @@ def simulate(aer, enmap, coupling, o2_model='lbl', table=None):
         proc.get_gas_transmittance = types.MethodType(hgrs_gas_transmittance(o2_model_hgrs, table), proc)
     aero = radoc.Aerosol(naot, proc.lut.naot_lut)
     aero.process()
-    proc.execute(aerosol_combination=aero.model_db.aerosol_combination)
+    proc.execute(aerosol_combination=aero.model_db.aerosol_combination, sunglint=SUNGLINT if V12 else None)
     db = proc.radcalnet_db.isel(time=0).squeeze()
+    if V12:
+        db['Rtoa'] = db['Rtoa_glint']
     return db, aero.model_db.aerosol_combination.isel(time=0).squeeze()
 
 
@@ -184,7 +206,7 @@ def run(row):
         for name in todo:
             db, comb = simulate(aer, enmap, *GAS_MODELS[name])
             wl_f = db.wl.values
-            for v in ('Rtoa', 'Ratm'):
+            for v in ('Rtoa', 'Ratm') + (('Rglint',) if V12 else ()):
                 vals = db[v].transpose(..., 'wl').values
                 out[f'{v}_{name}'] = ('wl', gaussian_bands(vals, wl_f, enmap.wl.values, enmap.fwhm.values))
         out['aerosol_combination'] = comb.reset_coords(drop=True)
