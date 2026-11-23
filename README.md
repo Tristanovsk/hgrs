@@ -155,7 +155,35 @@ Related packages: [GRS](https://github.com/CNES/GRSprocessor) (multispectral ima
 
 ## Examples
 
-![example spectra](fig/check_spectra.png)
+**Products of a PRISMA image** (Brazil, 6 February 2026, strong sunglint): true-colour $R_{rs}$, sunglint
+reflectance (grey scale) at full resolution, aerosol optical thickness and water vapour column on the grid of the
+retrievals. The along-track stripes of the aerosol optical thickness follow the detector columns (instrument noise
+study in `validation/noise`).
 
-![example l2c](fig/test_L2C_Garda.png)
-![example l1c](fig/test_L1C_Garda_water.png)
+![PRISMA products](fig/readme_scene_prisma.jpg)
+
+**EnMAP images at AERONET-OC stations**: true-colour TOA reflectance, true-colour $R_{rs}$ retrieved by hGRS 2.1.0
+and sunglint reflectance (grey scale); the red cross marks the station (crops of 9 km).
+
+![EnMAP gallery](fig/readme_gallery_enmap_1.jpg)
+
+**Validation with AERONET-OC**: $R_{rs}$ per band, aerosol optical thickness and water vapour column, with the hard
+non-negativity constraint (grey circles) and the soft constraint with the CAMS prior (coloured by the AERONET AOT).
+EnMAP: hGRS 2.1.0 (soft: with the VNIR detector correction); PRISMA: provisional runs of hGRS 2.0.0, to be updated
+with 2.1.0.
+
+![Rrs validation](fig/readme_scatter_rrs.png)
+
+![AOT and water vapour validation](fig/readme_params.png)
+
+**Non-negativity constraint over dark water** (EnMAP, Acqua Alta tower, 29 July 2023): with the hard constraint the
+aerosol optical thickness ends at its lower bound and $R_{rs}$ is overestimated in the blue-green; the soft
+constraint with the CAMS prior retrieves the AERONET AOT, at the cost of slightly negative $R_{rs}$ where the VNIR
+near infrared of EnMAP reads low.
+
+![Non-negativity](fig/readme_nonneg_enmap.png)
+
+**Radiometric closure of EnMAP** at the AERONET-OC stations (TOA simulations with radcalnet_oc 1.2): the visible and
+the SWIR agree with the simulation, the near-infrared bands of the VNIR detector (742-888 nm, red) read 15-20 % low.
+
+![EnMAP closure](fig/readme_closure.png)
