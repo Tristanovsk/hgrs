@@ -13,6 +13,7 @@ Writes ``closure/residual_by_band.csv`` (median and spread of the residual per E
 
 Usage: python closure_stats.py [model ...]
 '''
+import os
 import sys
 import warnings
 
@@ -23,7 +24,8 @@ import xarray as xr
 from common import OUT_DIR
 
 warnings.filterwarnings('ignore')
-CLOSURE = OUT_DIR / 'closure'
+# HGRS_CLOSURE=v12: closure with radcalnet_oc 1.2 (see closure.py)
+CLOSURE = OUT_DIR / ('closure_v12' if os.environ.get('HGRS_CLOSURE', '') == 'v12' else 'closure')
 # bands with weak gaseous absorption (nm, nearest EnMAP band)
 CONTINUUM = [443, 490, 560, 665, 709, 745, 778, 865, 1040, 1050, 1235, 1245, 1555, 1700, 1750, 2125, 2215]
 DEG = 3

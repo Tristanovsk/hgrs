@@ -16,3 +16,11 @@ test the water vapour retrieval and the O2 correction, and support the ``gas_cou
    coupling_01_transmittance
    coupling_02_water_vapor
    coupling_03_o2_bands
+
+**O2-A band of EnMAP.** Closure of the O2-A band with EnMAP at AERONET-OC stations and over bright bare land: the
+763.7 nm band of EnMAP reads low, which the default REPTRAN model in the O2-A band compensates.
+
+.. toctree::
+   :maxdepth: 1
+
+   o2a_enmap_closure
