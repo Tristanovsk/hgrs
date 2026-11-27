@@ -48,13 +48,14 @@ Cloud masking uses [OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask), 
 
 ### Look-up tables
 
-Download the look-up table (LUT) files ([download lut](https://drive.google.com/drive/folders/1r3unjh8UYTvO87nbppqivVq_cwbVxhLk?usp=sharing))
-and copy them into the default folder of hGRS, `~/.local/share/hgrs/lut` on Linux (no configuration needed), or
-keep them in another folder and write it in your user configuration file (`~/.config/hgrs/config.yml`, no
-reinstallation needed when it changes). Then check the LUTs:
+The look-up table (LUT) files, shared with GRS, are published on [Zenodo](https://doi.org/10.5281/zenodo.23394202)
+(about 850 MB). Download them into the default folder of hGRS, `~/.local/share/hgrs/lut` on Linux (no configuration
+needed), or keep them in another folder and write it in your user configuration file (`~/.config/hgrs/config.yml`,
+no reinstallation needed when it changes). Then check the LUTs:
 
 ```commandline
 hgrs_config --init path/to/lut   # only if the LUTs are not in the default folder
+hgrs_config --download           # checksums verified; --force to download them again
 hgrs_config
 ```
 

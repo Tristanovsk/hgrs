@@ -6,6 +6,20 @@ All notable changes to hGRS are listed here, most recent first. The format follo
 
 ## [Unreleased]
 
+### Added
+- `hgrs_config --download` (`--force` to download again; `hgrs.config.loader.download_luts`): download of the
+  missing LUTs from the Zenodo record shared with GRS (`zenodo` section of the configuration, record 23394202,
+  doi:10.5281/zenodo.23394202), checked against the checksum given by Zenodo and written to a `.part` file
+  renamed at the end. The gaseous absorption LUT shipped with the package is left as it is.
+
+### Changed
+- Default TOA LUT `toa_lut_opac_wind_v3.nc`, the name of the file published on Zenodo, in place of
+  `toa_lut_opac_wind_up_v3.nc`, which is not published: the same LUT uncompressed (I identical, Ed within
+  2.3e-5), products unchanged. A LUT folder holding only the former name keeps working
+  (`app_config.LUT_ALIASES`, both ways; `old_config.yml` keeps the former name).
+- Installation, configuration and README: LUTs from Zenodo (`hgrs_config --download`) instead of the Google
+  Drive folder.
+
 ## [2.1.0] - 2026-11-21
 
 ### Added

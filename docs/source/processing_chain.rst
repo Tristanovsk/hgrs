@@ -282,7 +282,8 @@ Data Types
    * - Look-up tables
      - Radiative transfer simulations of the TOA reflectance and of the transmittances
      - static
-     - ``toa_lut_opac_wind_up_v3.nc``, ``transmittance_lut_opac_wind_v3.nc`` (configuration ``path``)
+     - ``toa_lut_opac_wind_v3.nc``, ``transmittance_lut_opac_wind_v3.nc`` (configuration ``path``; Zenodo
+       doi:10.5281/zenodo.23394202, ``hgrs_config --download``)
    * - Level-2A hGRS output
      - NetCDF file of the remote-sensing reflectance product
      - one scene, one date

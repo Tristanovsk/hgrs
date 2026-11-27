@@ -6,6 +6,12 @@ path:
   trans_lut: 'transmittance_lut_opac_wind_v3.nc'
   abs_gas_file: 'lut_abs_opt_thickness_normalized.nc'
 
+# Zenodo record of the LUTs, used by `hgrs_config --download` (toa_lut_opac_wind_up_v3.nc is
+# downloaded as toa_lut_opac_wind_v3.nc, the same LUT compressed)
+zenodo:
+  url: 'https://zenodo.org'
+  record: 23394202
+
 atmospheric_correction:
   product:
     sunglint_wavelengths_nm: [2150, 2250]

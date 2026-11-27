@@ -4,10 +4,19 @@ Installation
 Look-up tables
 --------------
 
-The radiative transfer look-up tables (LUT) are not part of the package. Download them from
-`this folder <https://drive.google.com/drive/folders/1r3unjh8UYTvO87nbppqivVq_cwbVxhLk?usp=sharing>`__
-and save them in the default folder of hGRS, ``~/.local/share/hgrs/lut`` on Linux (no configuration
-needed, see :doc:`configuration`), or in a directory of your choice (``your_LUT_PATH`` below).
+The radiative transfer look-up tables (LUT) are not part of the package: ``toa_lut_opac_wind_v3.nc``
+(835 MB) and ``transmittance_lut_opac_wind_v3.nc`` (0.6 MB), shared with GRS and published on Zenodo
+(`doi:10.5281/zenodo.23394202 <https://doi.org/10.5281/zenodo.23394202>`__). Once the package is
+installed, download them into the default folder of hGRS, ``~/.local/share/hgrs/lut`` on Linux (no
+configuration needed, see :doc:`configuration`):
+
+.. code-block:: bash
+
+   hgrs_config --download
+
+or download them from the Zenodo page into a directory of your choice (``your_LUT_PATH`` below). The
+former name of the TOA LUT, ``toa_lut_opac_wind_up_v3.nc`` (the same LUT, uncompressed), is still found
+in the LUT folder.
 
 Python environment
 ------------------

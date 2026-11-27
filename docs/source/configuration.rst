@@ -6,14 +6,21 @@ Quick start
 
 hGRS needs the look-up tables (LUTs, see :doc:`installation`). Either:
 
-- **copy them into the default folder**, with no configuration: ``~/.local/share/hgrs/lut`` on Linux
+- **download them into the default folder**, with no configuration: ``~/.local/share/hgrs/lut`` on Linux
   (``~/Library/Application Support/hgrs/lut`` on macOS, ``%LOCALAPPDATA%\hgrs\lut`` on Windows;
-  ``hgrs_config`` prints it, and ``hgrs_config --init`` creates it),
-- **or keep them in another folder** and write it in your user configuration file:
+  ``hgrs_config`` prints it, and ``hgrs_config --init`` creates it):
+
+  .. code-block:: bash
+
+     hgrs_config --download
+
+- **or keep them in another folder** (e.g. a copy shared with GRS) and write it in your user configuration
+  file:
 
   .. code-block:: bash
 
      hgrs_config --init /path/to/lut   # creates ~/.config/hgrs/config.yml
+     hgrs_config --download            # if the LUTs are not there yet
 
 Then check:
 
@@ -29,7 +36,7 @@ or default folder), and ends with the status of each LUT; it returns the exit co
 
    LUT folder:            /path/to/lut (user configuration)
    ...
-   LUT toa           ok      /path/to/lut/toa_lut_opac_wind_up_v3.nc
+   LUT toa           ok      /path/to/lut/toa_lut_opac_wind_v3.nc
    LUT transmittance ok      /path/to/lut/transmittance_lut_opac_wind_v3.nc
    LUT abs_gas       ok      .../hgrs/data/lut/lut_abs_opt_thickness_normalized.nc
 

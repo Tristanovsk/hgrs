@@ -19,13 +19,17 @@ The user file only needs the keys that differ from the defaults, e.g.::
       data_root: '/path/to/lut'
 
 Create it with ``hgrs_config --init /path/to/lut``; run ``hgrs_config`` to print the configuration in
-use and check the LUTs.
+use and check the LUTs, and ``hgrs_config --download`` to download the missing LUTs from Zenodo
+(record of the ``zenodo`` section, shared with GRS).
 '''
 
 import argparse
 import datetime
+import hashlib
+import json
 import os
 import sys
+import urllib.request
 from functools import lru_cache
 from importlib.resources import files
 from pathlib import Path
@@ -172,19 +176,101 @@ def lut_status():
             ((name, config.resolve_lut(name)) for name in config.lut_files)]
 
 
+def zenodo_record_url():
+    '''
+    URL of the Zenodo API record of the LUTs (``zenodo`` section of the configuration).
+
+    :raises ValueError: if no record is configured
+    '''
+    zenodo = load_config().get('zenodo') or {}
+    if not zenodo.get('record'):
+        raise ValueError('no Zenodo record of the LUTs is configured (zenodo: record); download the '
+                         'LUTs manually and copy them into the LUT folder (see `hgrs_config`)')
+    return f"{zenodo.get('url', 'https://zenodo.org').rstrip('/')}/api/records/{zenodo['record']}"
+
+
+def _published_name(name, remote):
+    '''Name in the Zenodo record of the LUT file `name` (itself or an alias), None if not published.'''
+    from .app_config import LUT_ALIASES
+    for candidate in (name, *LUT_ALIASES.get(name, ())):
+        if candidate in remote:
+            return candidate
+    return None
+
+
+def download_luts(force=False, progress=True):
+    '''
+    Download the LUTs of the configuration in use from Zenodo into the LUT folder.
+
+    A LUT configured under the name of an alias (``toa_lut_opac_wind_up_v3.nc``) is downloaded under
+    its published name (``toa_lut_opac_wind_v3.nc``), which the configuration then finds. LUTs that
+    are not in the record but are there (the gaseous absorption LUT shipped with the package) are
+    left as they are. Each file is checked against the checksum given by Zenodo; it is written to a
+    ``.part`` file renamed at the end, so that an interrupted download leaves no incomplete LUT.
+
+    :param force: download the files that already exist
+    :param progress: print the progress of the downloads
+    :return: list of the paths of the LUTs
+    :raises FileNotFoundError: if a missing LUT is not in the Zenodo record
+    :raises OSError: if a checksum does not match
+    '''
+    with urllib.request.urlopen(zenodo_record_url()) as response:
+        record = json.load(response)
+    remote = {f['key']: f for f in record['files']}
+
+    paths = []
+    for name, path, exists in lut_status():
+        published = _published_name(path.name, remote)
+        if exists and (not force or published is None):
+            if progress:
+                print(f'LUT {name:13s} already there: {path}')
+            paths.append(path)
+            continue
+        if published is None:
+            raise FileNotFoundError(f'{path.name} is not in the Zenodo record '
+                                    f'{record.get("links", {}).get("self_html", "")}')
+        target = path.with_name(published)
+        entry = remote[published]
+        algorithm, expected = entry['checksum'].split(':', 1)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        part = target.with_name(target.name + '.part')
+        digest = hashlib.new(algorithm)
+        done = 0
+        with urllib.request.urlopen(entry['links']['self']) as response, open(part, 'wb') as out:
+            for block in iter(lambda: response.read(1 << 20), b''):
+                out.write(block)
+                digest.update(block)
+                done += len(block)
+                if progress:
+                    print(f'\rLUT {name:13s} downloading {published}: '
+                          f'{done / 1e6:.0f}/{entry["size"] / 1e6:.0f} MB', end='', flush=True)
+        if progress:
+            print(flush=True)
+        if digest.hexdigest() != expected:
+            part.unlink()
+            raise OSError(f'{algorithm} checksum mismatch for {published}: download it again')
+        part.replace(target)
+        paths.append(target)
+    return paths
+
+
 def main(argv=None):
     '''
     ``hgrs_config`` command: print the configuration in use and check the LUTs (exit code 1 if a LUT
-    is missing), or create the user configuration file with ``--init``.
+    is missing), create the user configuration file with ``--init``, download the LUTs with
+    ``--download``.
     '''
     parser = argparse.ArgumentParser(
         prog='hgrs_config',
-        description='Print the hGRS configuration in use and check the LUTs, '
-                    'or create the user configuration file.')
+        description='Print the hGRS configuration in use and check the LUTs, create the user '
+                    'configuration file, or download the LUTs from Zenodo.')
     parser.add_argument('--init', nargs='?', const='', metavar='DATA_ROOT',
                         help='create the user configuration file, with DATA_ROOT the folder of the LUTs')
+    parser.add_argument('--download', action='store_true',
+                        help='download the missing LUTs from Zenodo into the LUT folder')
     parser.add_argument('--force', action='store_true',
-                        help='with --init, overwrite an existing user configuration file')
+                        help='with --init, overwrite an existing user configuration file; '
+                             'with --download, download the LUTs again')
     args = parser.parse_args(argv)
 
     if args.init is not None:
@@ -195,8 +281,17 @@ def main(argv=None):
             return 1
         print(f'user configuration written: {user_file}')
         if not args.init:
-            print(f'copy the LUT files into the default folder: {default_data_root()}')
+            print(f'download the LUTs (hgrs_config --download) or copy them into the default folder: '
+                  f'{default_data_root()}')
         _load_config.cache_clear()
+        print('---')
+
+    if args.download:
+        try:
+            download_luts(force=args.force)
+        except (ValueError, OSError) as error:
+            print(f'error: {error}', file=sys.stderr)
+            return 1
         print('---')
 
     from . import behavior
@@ -213,7 +308,8 @@ def main(argv=None):
         print(f'LUT {name:13s} {"ok     " if exists else "MISSING"} {path}')
         missing |= not exists
     if missing:
-        print(f'error: LUT file(s) missing; copy them into {load_config()["path"]["data_root"]}, or set '
+        print(f'error: LUT file(s) missing; download them with `hgrs_config --download` (into '
+              f'{load_config()["path"]["data_root"]}), copy them there, or set '
               'their folder with `hgrs_config --init /path/to/lut` (or path: data_root in the user '
               'configuration file, or HGRS_DATA_ROOT)', file=sys.stderr)
         return 1
